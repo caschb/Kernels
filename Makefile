@@ -219,6 +219,9 @@ allserial:
 	cd SERIAL/PIC;              $(MAKE) pic       "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
 	cd SERIAL/AMR;              $(MAKE) amr       "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
 
+allstarpu:
+	cd STARPU/PIC;				$(MAKE) pic       "DEFAULT_OPT_FLAGS  = $(PRK_FLAGS)"
+
 allfortran:
 	$(MAKE) -C FORTRAN
 
