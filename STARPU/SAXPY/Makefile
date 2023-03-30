@@ -1,5 +1,4 @@
 include ../../common/STARPU.defs
-COMOBJS += random_draw.o wtime.o
 
 ##### User configurable options #####
 
@@ -39,7 +38,7 @@ RESTRICT_KEYWORD=0/1     disable/enable restrict keyword (aliasing) [0]      \n\
 VERBOSE=0/1              omit/include verbose run information       [0]"
 
 TUNEFLAGS    = $(VERBOSEFLAG) $(USERFLAGS)  $(RESTRICTFLAG)
-PROGRAM      = pic
+PROGRAM      = saxpy
 OBJS         = $(PROGRAM).o $(COMOBJS)
 
 include ../../common/make.common

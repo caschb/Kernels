@@ -221,6 +221,7 @@ allserial:
 
 allstarpu:
 	cd STARPU/PIC;				$(MAKE) pic       "DEFAULT_OPT_FLAGS  = $(PRK_FLAGS)"
+	cd STARPU/SAXPY;				$(MAKE) saxpy       "DEFAULT_OPT_FLAGS  = $(PRK_FLAGS)"
 
 allfortran:
 	$(MAKE) -C FORTRAN
@@ -333,6 +334,8 @@ clean:
 	cd SERIAL/Branch;           $(MAKE) clean
 	cd SERIAL/PIC;              $(MAKE) clean
 	cd SERIAL/AMR;              $(MAKE) clean
+	cd STARPU/PIC;							$(MAKE) clean
+	cd STARPU/SAXPY;						$(MAKE) clean
 	make -C FORTRAN clean
 	make -C Cxx11 clean
 	make -C C1z clean
