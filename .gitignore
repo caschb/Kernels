@@ -408,6 +408,8 @@ SERIAL/Sparse/sparse
 SERIAL/Stencil/stencil
 SERIAL/Synch_p2p/p2p
 SERIAL/Transpose/transpose
+STARPU/PIC/pic
+STARPU/SAXPY/saxpy
 dgemm-vector.dSYM
 dgemm.dSYM
 nstream-opencl.dSYM
