@@ -188,6 +188,7 @@ allopenmp:
 	cd OPENMP/PIC;              $(MAKE) pic       "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
 
 allcharm++:
+	cd CHARM++/PIC;       			$(MAKE) pic       "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
 	cd CHARM++/Synch_p2p;       $(MAKE) p2p       "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
 	cd CHARM++/Stencil;         $(MAKE) stencil   "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
 	cd CHARM++/Transpose;       $(MAKE) transpose "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
