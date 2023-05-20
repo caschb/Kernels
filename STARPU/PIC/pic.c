@@ -465,29 +465,34 @@ void compute_coordinates(void *buffers[], void *cl_arg) {
   struct starpu_vector_interface *QgridInterface = buffers[0];
   double *Qgrid = (double *)STARPU_VECTOR_GET_PTR(QgridInterface);
 
-  // struct starpu_vector_interface *particlesInterface = buffers[1];
-  // particle_t *p = (particle_t *)STARPU_VECTOR_GET_PTR(particlesInterface);
-
-  struct starpu_variable_interface *particleInterface = buffers[1];
-  particle_t *p = (particle_t *)STARPU_VARIABLE_GET_PTR(particleInterface);
+  struct starpu_vector_interface *particlesInterface = buffers[1];
+  particle_t *p = (particle_t *)STARPU_VECTOR_GET_PTR(particlesInterface);
+  unsigned number_of_particles = STARPU_VECTOR_GET_NX(particlesInterface);
+  // printf("Number_of_particles: %d\n", number_of_particles);
+  // printf("p[0].x: %d\n", p[0].x);
+  // struct starpu_variable_interface *particleInterface = buffers[1];
+  // particle_t *p = (particle_t *)STARPU_VARIABLE_GET_PTR(particleInterface);
 
   struct starpu_variable_interface *LInterface = buffers[2];
   uint64_t L = *(uint64_t *)STARPU_VARIABLE_GET_PTR(LInterface);
 
   // uint64_t i = *(uint64_t *)cl_arg;
   // printf("%lu\n", i);
-  double fx = 0.0;
-  double fy = 0.0;
+  for(unsigned i = 0; i < number_of_particles; ++i)
+  {
+    double fx = 0.0;
+    double fy = 0.0;
 
-  computeTotalForce(*p, L, Qgrid, &fx, &fy);
-  double ax = fx * MASS_INV;
-  double ay = fy * MASS_INV;
+    computeTotalForce(p[i], L, Qgrid, &fx, &fy);
+    double ax = fx * MASS_INV;
+    double ay = fy * MASS_INV;
 
-  p->x = fmod(p->x + p->v_x * DT + 0.5 * ax * DT * DT + L, L);
-  p->y = fmod(p->y + p->v_y * DT + 0.5 * ay * DT * DT + L, L);
+    p[i].x = fmod(p[i].x + p[i].v_x * DT + 0.5 * ax * DT * DT + L, L);
+    p[i].y = fmod(p[i].y + p[i].v_y * DT + 0.5 * ay * DT * DT + L, L);
 
-  p->v_x += ax * DT;
-  p->v_y += ay * DT;
+    p[i].v_x += ax * DT;
+    p[i].v_y += ay * DT;
+  }
 }
 
 int bad_patch(bbox_t *patch, bbox_t *patch_contain) {
@@ -698,23 +703,33 @@ int main(int argc, char **argv) {
   if (ret != 0) {
     return FAILURE;
   }
+  unsigned threads = starpu_cpu_worker_get_count();
+  unsigned * particles_per_thread = prk_malloc(threads * sizeof(threads)); 
+
+  for(unsigned k = 0; k < threads; ++k)
+  {
+    particles_per_thread[k] = n / threads;
+    if(k < (n % threads))
+    {
+      particles_per_thread[k] += 1;
+    }
+  }
+  printf("Number of threads              = %u\n", threads);
 
   starpu_data_handle_t qgrid_handle;
-  // starpu_data_handle_t particles_handle;
   starpu_data_handle_t L_handle;
 
   starpu_data_handle_t *particles_handles =
       prk_malloc(sizeof(starpu_data_handle_t) * n);
-  for (int k = 0; k < n; ++k) {
-    starpu_variable_data_register(&particles_handles[k], STARPU_MAIN_RAM,
-                                  (uintptr_t) & (particles[k]),
-                                  sizeof(particle_t));
+  unsigned start = 0;
+  for(unsigned k = 0; k < threads; ++k)
+  {
+    starpu_vector_data_register(&particles_handles[k], STARPU_MAIN_RAM, (uintptr_t) &particles[start], particles_per_thread[k], sizeof(particle_t));
+    start += particles_per_thread[k];
   }
 
   starpu_vector_data_register(&qgrid_handle, STARPU_MAIN_RAM, (uintptr_t)Qgrid,
                               (L + 1) * (L + 1), sizeof(double));
-  // starpu_vector_data_register(&particles_handle, STARPU_MAIN_RAM,
-  //(uintptr_t)particles, n, sizeof(particle_t));
   starpu_variable_data_register(&L_handle, STARPU_MAIN_RAM, (uintptr_t)&L,
                                 sizeof(uint64_t));
 
@@ -731,7 +746,7 @@ int main(int argc, char **argv) {
       pic_time = wtime();
 
     /* Calculate forces on particles and update positions */
-    for (i = 0; i < n; i++) {
+    for (i = 0; i < threads; i++) {
       struct starpu_task *task = starpu_task_create();
       task->synchronous = 0;
       task->cl = &cl;
@@ -742,15 +757,18 @@ int main(int argc, char **argv) {
       task->cl_arg = &i;
       task->cl_arg_size = sizeof(uint64_t);
       int ret = starpu_task_submit(task);
+      if (ret != 0) {
+        return FAILURE;
+      }
     }
   }
   starpu_task_wait_for_all();
   starpu_data_unregister(qgrid_handle);
-  for (int k = 0; k < n; ++k) {
+  for (int k = 0; k < threads; ++k) {
     starpu_data_unregister(particles_handles[k]);
   }
-  //prk_free(particles_handles);
-  // starpu_data_unregister(particles_handle);
+  prk_free(particles_handles);
+  prk_free(particles_per_thread);
   starpu_data_unregister(L_handle);
   pic_time = wtime() - pic_time;
   starpu_shutdown();
