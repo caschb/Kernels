@@ -162,7 +162,10 @@ allmpishm:
 	cd MPISHM/Stencil;          $(MAKE) stencil   "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
 	cd MPISHM/Transpose;        $(MAKE) transpose "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
 
-allmpi: allmpi1 allmpiomp allmpirma allmpishm
+allmpistarpu:
+	cd MPISTARPU/PIC-static;		$(MAKE) pic				"DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
+
+allmpi: allmpi1 allmpiomp allmpirma allmpishm allmpistarpu
 
 allupc:
 	cd UPC/Synch_p2p;           $(MAKE) p2p       "DEFAULT_OPT_FLAGS   = $(PRK_FLAGS)"
@@ -311,6 +314,7 @@ clean:
 	cd MPIOPENMP/Stencil;       $(MAKE) clean
 	cd MPIOPENMP/Transpose;     $(MAKE) clean
 	cd MPIOPENMP/Synch_p2p;     $(MAKE) clean
+	cd MPISTARPU/PIC-static;    $(MAKE) clean
 	cd OPENMP/DGEMM;            $(MAKE) clean
 	cd OPENMP/Nstream;          $(MAKE) clean
 	cd OPENMP/Reduce;           $(MAKE) clean
