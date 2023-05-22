@@ -77,6 +77,7 @@ HISTORY: - Written by Evangelos Georganas, August 2015.
 #include <par-res-kern_general.h>
 #include <par-res-kern_mpi.h>
 #include <random_draw.h>
+#include <starpu.h>
 
 /* M_PI is not defined in strict C99 */
 #ifdef M_PI
@@ -516,17 +517,6 @@ void add_particle_to_buffer(particle_t p, particle_t **buffer, uint64_t *positio
    particle_t *temp_buf;
 
    if (cur_pos == cur_buf_size) {
-      /* Have to resize buffer */
-      temp_buf = (particle_t*) prk_malloc(2 * cur_buf_size * sizeof(particle_t));
-      if (!temp_buf) {
-        printf("Could not increase particle buffer size\n");
-        /* do not attempt graceful exit; just allow code to abort */
-        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
-      }
-      memcpy(temp_buf, cur_buffer, cur_buf_size*sizeof(particle_t));
-      prk_free(cur_buffer);
-      cur_buffer = temp_buf;
-      (*buffer) = temp_buf;
       (*buffer_size) = cur_buf_size * 2;
    }
 
@@ -606,6 +596,11 @@ void resize_buffer(particle_t **buffer, uint64_t *size, uint64_t new_size)
       (*size) = 2*new_size;
    }
 
+}
+
+void compute_coordinates(void * buffers[], void *cl_arg)
+{
+  
 }
 
 int main(int argc, char ** argv) {
@@ -930,6 +925,27 @@ int main(int argc, char ** argv) {
   else {
     MPI_Reduce(&particles_count, &total_particles, 1, MPI_UINT64_T, MPI_SUM, root, MPI_COMM_WORLD);
   }
+  printf("Number of particles placed     = %lu\n", n);
+  int ret = starpu_init(NULL);
+  if (ret != 0) {
+    bail_out(1);
+  }
+  unsigned threads = starpu_cpu_worker_get_count();
+  if (my_ID == root)
+  {
+    printf("Number of threads on rank %d: %d\n", my_ID, threads);
+  }
+  
+  unsigned * particles_per_thread = prk_malloc(threads * sizeof(threads)); 
+
+  for(unsigned k = 0; k < threads; ++k)
+  {
+    particles_per_thread[k] = n / threads;
+    if(k < (n % threads))
+    {
+      particles_per_thread[k] += 1;
+    }
+  }
 
   /* Allocate space for communication buffers. Adjust appropriately as the simulation proceeds */
 
@@ -937,8 +953,8 @@ int main(int argc, char ** argv) {
   for (i=0; i<8; i++) {
     sendbuf_size[i] = MAX(1,n/(MEMORYSLACK*Num_procs));
     recvbuf_size[i] = MAX(1,n/(MEMORYSLACK*Num_procs));
-    sendbuf[i] = (particle_t*) prk_malloc(sendbuf_size[i] * sizeof(particle_t));
-    recvbuf[i] = (particle_t*) prk_malloc(recvbuf_size[i] * sizeof(particle_t));
+    sendbuf[i] = (particle_t*) prk_malloc(n * sizeof(particle_t));
+    recvbuf[i] = (particle_t*) prk_malloc(n * sizeof(particle_t));
     if (!sendbuf[i] || !recvbuf[i]) error++;
   }
   if (error) printf("Rank %d could not allocate communication buffers\n", my_ID);
@@ -1045,6 +1061,8 @@ int main(int argc, char ** argv) {
   MPI_Reduce(&my_checksum, &tot_checksum, 1, MPI_UINT64_T, MPI_SUM, root, MPI_COMM_WORLD);
   /* Gather total checksum of correctness flags */
   MPI_Reduce(&correctness, &correctness_checksum, 1, MPI_UINT64_T, MPI_SUM, root, MPI_COMM_WORLD);
+
+  prk_free(particles_per_thread);
 
   if ( my_ID == root) {
     if (correctness_checksum != total_particles ) {
