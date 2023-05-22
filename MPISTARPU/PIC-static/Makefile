@@ -1,4 +1,4 @@
-include ../../common/MPI.defs
+include ../../common/MPISTARPU.defs
 COMOBJS += random_draw.o
 
 ##### User configurable options #####

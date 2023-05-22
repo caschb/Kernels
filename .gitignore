@@ -353,6 +353,7 @@ MPIOPENMP/Nstream/nstream
 MPIOPENMP/Stencil/stencil
 MPIOPENMP/Synch_p2p/p2p
 MPIOPENMP/Transpose/transpose
+MPISTARPU/PIC-static/pic
 MPIRMA/Stencil/stencil
 MPIRMA/Synch_p2p/p2p
 MPIRMA/Transpose/transpose
