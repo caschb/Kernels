@@ -517,6 +517,17 @@ void add_particle_to_buffer(particle_t p, particle_t **buffer, uint64_t *positio
    particle_t *temp_buf;
 
    if (cur_pos == cur_buf_size) {
+      /* Have to resize buffer */
+      temp_buf = (particle_t*) prk_malloc(2 * cur_buf_size * sizeof(particle_t));
+      if (!temp_buf) {
+        printf("Could not increase particle buffer size\n");
+        /* do not attempt graceful exit; just allow code to abort */
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+      }
+      memcpy(temp_buf, cur_buffer, cur_buf_size*sizeof(particle_t));
+      prk_free(cur_buffer);
+      cur_buffer = temp_buf;
+      (*buffer) = temp_buf;
       (*buffer_size) = cur_buf_size * 2;
    }
 
@@ -600,7 +611,27 @@ void resize_buffer(particle_t **buffer, uint64_t *size, uint64_t new_size)
 
 void compute_coordinates(void * buffers[], void *cl_arg)
 {
-  
+  double *Qgrid = (double *)STARPU_VECTOR_GET_PTR(buffers[0]);
+  particle_t *p = (particle_t *)STARPU_VECTOR_GET_PTR(buffers[1]);
+  unsigned number_of_particles = STARPU_VECTOR_GET_NX(buffers[1]);
+  uint64_t L = *(uint64_t *)STARPU_VARIABLE_GET_PTR(buffers[2]);
+  bbox_t my_tile = *(bbox_t *)STARPU_VECTOR_GET_PTR(buffers[3]);
+
+  for(unsigned i = 0; i < number_of_particles; ++i)
+  {
+    double fx = 0.0;
+    double fy = 0.0;
+
+    computeTotalForce(p[i], my_tile, Qgrid, &fx, &fy);
+    double ax = fx * MASS_INV;
+    double ay = fy * MASS_INV;
+
+    p[i].x = fmod(p[i].x + p[i].v_x * DT + 0.5 * ax * DT * DT + L, L);
+    p[i].y = fmod(p[i].y + p[i].v_y * DT + 0.5 * ay * DT * DT + L, L);
+
+    p[i].v_x += ax * DT;
+    p[i].v_y += ay * DT;
+  }
 }
 
 int main(int argc, char ** argv) {
@@ -925,7 +956,6 @@ int main(int argc, char ** argv) {
   else {
     MPI_Reduce(&particles_count, &total_particles, 1, MPI_UINT64_T, MPI_SUM, root, MPI_COMM_WORLD);
   }
-  printf("Number of particles placed     = %lu\n", n);
   int ret = starpu_init(NULL);
   if (ret != 0) {
     bail_out(1);
@@ -940,12 +970,36 @@ int main(int argc, char ** argv) {
 
   for(unsigned k = 0; k < threads; ++k)
   {
-    particles_per_thread[k] = n / threads;
-    if(k < (n % threads))
+    particles_per_thread[k] = particles_count / threads;
+    if(k < (particles_count % threads))
     {
       particles_per_thread[k] += 1;
     }
   }
+  starpu_data_handle_t qgrid_handle;
+  starpu_data_handle_t L_handle;
+  starpu_data_handle_t my_tile_handle;
+  starpu_data_handle_t *particles_handles =
+      prk_malloc(sizeof(starpu_data_handle_t) * threads);
+  unsigned start = 0;
+  for(unsigned k = 0; k < threads; ++k)
+  {
+    starpu_vector_data_register(&particles_handles[k], STARPU_MAIN_RAM, (uintptr_t) &particles[start], particles_per_thread[k], sizeof(particle_t));
+    start += particles_per_thread[k];
+  }
+  uint64_t n_columns = my_tile.right - my_tile.left + 1;
+  uint64_t n_rows = my_tile.top - my_tile.bottom + 1;
+  starpu_vector_data_register(&qgrid_handle, STARPU_MAIN_RAM, (uintptr_t)grid,
+                              n_columns * n_rows, sizeof(double));
+  starpu_variable_data_register(&L_handle, STARPU_MAIN_RAM, (uintptr_t)&L,
+                                sizeof(uint64_t));
+  starpu_variable_data_register(&my_tile_handle, STARPU_MAIN_RAM, (uintptr_t)&my_tile, sizeof(bbox_t));
+
+  struct starpu_codelet cl = {.where = STARPU_CPU,
+                              .cpu_funcs = {compute_coordinates},
+                              .cpu_funcs_name = {"compute_coordinates"},
+                              .nbuffers = 4,
+                              .modes = {STARPU_R, STARPU_RW, STARPU_R, STARPU_R}};
 
   /* Allocate space for communication buffers. Adjust appropriately as the simulation proceeds */
 
@@ -953,16 +1007,15 @@ int main(int argc, char ** argv) {
   for (i=0; i<8; i++) {
     sendbuf_size[i] = MAX(1,n/(MEMORYSLACK*Num_procs));
     recvbuf_size[i] = MAX(1,n/(MEMORYSLACK*Num_procs));
-    sendbuf[i] = (particle_t*) prk_malloc(n * sizeof(particle_t));
-    recvbuf[i] = (particle_t*) prk_malloc(n * sizeof(particle_t));
+    sendbuf[i] = (particle_t*) prk_malloc(sendbuf_size[i] * sizeof(particle_t));
+    recvbuf[i] = (particle_t*) prk_malloc(recvbuf_size[i] * sizeof(particle_t));
     if (!sendbuf[i] || !recvbuf[i]) error++;
   }
   if (error) printf("Rank %d could not allocate communication buffers\n", my_ID);
   bail_out(error);
-
   /* Run the simulation */
-  for (iter=0; iter<=iterations; iter++) {
 
+  for (iter=0; iter<=iterations; iter++) {
     /* start timer after a warmup iteration */
     if (iter == 1) {
       MPI_Barrier(MPI_COMM_WORLD);
@@ -975,22 +1028,28 @@ int main(int argc, char ** argv) {
     /* Process own particles */
     p = particles;
 
+    for (int i = 0; i < threads; i++) {
+      struct starpu_task * task = starpu_task_create();
+      task->synchronous = 0;
+      task->cl = &cl;
+      task->handles[0] = qgrid_handle;
+      task->handles[1] = particles_handles[i];
+      task->handles[2] = L_handle;
+      task->handles[3] = my_tile_handle;
+      int ret = starpu_task_submit(task);
+      if (ret != 0) {
+        bail_out(1);
+      }
+    }
+    starpu_task_wait_for_all();
+
+    unsigned start = 0;
+    for(unsigned k = 0; k < threads; ++k)
+    {
+      starpu_data_unregister(particles_handles[k]);
+    }
+
     for (i=0; i < particles_count; i++) {
-      fx = 0.0;
-      fy = 0.0;
-      computeTotalForce(p[i], my_tile, grid, &fx, &fy);
-
-      ax = fx * MASS_INV;
-      ay = fy * MASS_INV;
-
-      /* Update particle positions, taking into account periodic boundaries */
-      p[i].x = fmod(p[i].x + p[i].v_x*DT + 0.5*ax*DT*DT + L, L);
-      p[i].y = fmod(p[i].y + p[i].v_y*DT + 0.5*ay*DT*DT + L, L);
-
-      /* Update velocities */
-      p[i].v_x += ax * DT;
-      p[i].v_y += ay * DT;
-
       /* Check if particle stayed in same subdomain or moved to another */
       owner = find_owner(p[i], width, height, Num_procsx, icrit, jcrit, ileftover, jleftover);
       if (owner==my_ID) {
@@ -1043,7 +1102,23 @@ int main(int argc, char ** argv) {
       attach_received_particles(&particles, &ptr_my, &particles_size, recvbuf[2*i], to_recv[2*i],
                                 recvbuf[2*i+1], to_recv[2*i+1]);
     }
+
     particles_count = ptr_my;
+    for(unsigned k = 0; k < threads; ++k)
+    {
+      particles_per_thread[k] = particles_count / threads;
+      if(k < (particles_count % threads))
+      {
+        particles_per_thread[k] += 1;
+      }
+    }
+    
+    start = 0;
+    for(unsigned k = 0; k < threads; ++k)
+    {
+      starpu_vector_data_register(&particles_handles[k], STARPU_MAIN_RAM, (uintptr_t) &particles[start], particles_per_thread[k], sizeof(particle_t));
+      start += particles_per_thread[k];
+    }
   } // end of iterations
 
   local_pic_time = wtime() - local_pic_time;
