@@ -468,16 +468,10 @@ void compute_coordinates(void *buffers[], void *cl_arg) {
   struct starpu_vector_interface *particlesInterface = buffers[1];
   particle_t *p = (particle_t *)STARPU_VECTOR_GET_PTR(particlesInterface);
   unsigned number_of_particles = STARPU_VECTOR_GET_NX(particlesInterface);
-  // printf("Number_of_particles: %d\n", number_of_particles);
-  // printf("p[0].x: %d\n", p[0].x);
-  // struct starpu_variable_interface *particleInterface = buffers[1];
-  // particle_t *p = (particle_t *)STARPU_VARIABLE_GET_PTR(particleInterface);
 
   struct starpu_variable_interface *LInterface = buffers[2];
   uint64_t L = *(uint64_t *)STARPU_VARIABLE_GET_PTR(LInterface);
 
-  // uint64_t i = *(uint64_t *)cl_arg;
-  // printf("%lu\n", i);
   for(unsigned i = 0; i < number_of_particles; ++i)
   {
     double fx = 0.0;
@@ -754,8 +748,6 @@ int main(int argc, char **argv) {
       task->handles[1] = particles_handles[i];
       task->handles[2] = L_handle;
 
-      task->cl_arg = &i;
-      task->cl_arg_size = sizeof(uint64_t);
       int ret = starpu_task_submit(task);
       if (ret != 0) {
         return FAILURE;
