@@ -1,4 +1,3 @@
-import StableRNGs.StableRNG
 using TickTock
 
 const global MASS_INV = 1.0
@@ -8,7 +7,9 @@ const global DT = 1.0
 
 const global REL_X = 0.5
 const global REL_Y = 0.5
-const global random_seed = 27182818285
+const global random_seed::UInt64 = 27182818285
+const global LCG_a::UInt64 = 6364136223846793005
+const global LCG_c::UInt64 = 1442695040888963407
 
 @enum InitType GEOMETRIC SINUSOIDAL LINEAR PATCH UNDEFINED
 
@@ -65,10 +66,10 @@ function bad_patch(patch::BoundingBox, patch_contain::BoundingBox)
 end
 
 function initialize_grid(length)
-  q_grid = zeros(Float64, length, length)
-  for i in 1:length
-    for j in 1:length
-      q_grid[i, j] = i % 2 == 1 ? -Q : Q
+  q_grid = zeros(Float64, length+1, length+1)
+  for i in 1:(length+1)
+    for j in 1:(length+1)
+      q_grid[i, j] = (i - 1) % 2 == 1 ? -Q : Q
     end
   end
   return q_grid
@@ -95,21 +96,51 @@ function finish_distribution(n_placed, particles)
   end
 end
 
+function lcg_next(bound, seed)
+  new_seed = LCG_a * seed + LCG_c
+  return new_seed % bound, new_seed
+end
+
+function random_draw(mu, seed)
+  two_pi = 2.0*3.14159265358979323846
+  rand_max = typemax(UInt64)
+  rand_div = 1/rand_max
+  denominator = typemax(UInt32)
+  if mu >= 1.0
+    sigma = mu * 0.15
+    val0, seed = lcg_next(rand_max, seed)
+    val1, seed = lcg_next(rand_max, seed)
+    u0 = val0 * rand_div
+    u1 = val1 * rand_div
+
+    z0 = sqrt(-2.0 * log(u0)) * cos(two_pi * u1)
+    z1 = sqrt(-2.0 * log(u0)) * sin(two_pi * u1)
+    return UInt64(floor(z0 * sigma + mu + 0.5)), seed
+  else
+    numerator = UInt32(floor(mu * denominator))
+    i0, seed = lcg_next(denominator, seed)
+    i1, seed = lcg_next(denominator, seed)
+
+    return i1 <= numerator ? 1 : 0, seed
+  end
+end
+
 function initialize_geometric(n_input, L, rho, k, m)
   A = n_input * ((1.0 - rho) / (1.0-(rho ^ L))) / L
-  rng = StableRNG(random_seed)
   n_placed = 0
-  for x=1:L
-    for y=1:L
-      n_placed += rand(rng, UInt64) % (1 + UInt64(floor(A * rho ^ x)))
+  seed = random_seed
+  for x=0:(L-1)
+    for y=0:(L-1)
+      new_amount, seed = random_draw(A * rho ^ x, seed)
+      n_placed += new_amount
     end
   end
   particles = [Particle(0, 0, 0, 0, 0, 0, 0, 0, 0) for i = 1:n_placed]
-  rng = StableRNG(random_seed)
+  seed = random_seed
   pi = 1
-  for x=1:L
-    for y=1:L
-      actual_particles = rand(rng, UInt64) % (1 + UInt64(floor(A * rho ^ x)))
+  for x=0:(L-1)
+    for y=0:(L-1)
+      actual_particles, seed = random_draw(A * rho ^ x, seed)
       for p=1:actual_particles
         particles[pi].x = x + REL_X
         particles[pi].y = y + REL_Y
@@ -127,9 +158,9 @@ function compute_coulomb(x_dist, y_dist, q1, q2)
   r2 = x_dist * x_dist + y_dist * y_dist
   r = sqrt(r2)
   f_coulomb = q1 * q2 / r2
-
   fx = f_coulomb * x_dist / r
   fy = f_coulomb * y_dist / r
+  # println("r2: $(r2) f_coulomb: $(f_coulomb) fx: $(fx), fy: $(fy) q1: $(q1) q2: $(q2)")
 
   return fx, fy
 
@@ -138,24 +169,28 @@ end
 function compute_total_force(particle, q_grid)
   tmp_res_x = 0.0
   tmp_res_y = 0.0
-  y = Int64(floor(particle.y))
-  x = Int64(floor(particle.x))
-  # println("$(x), $(y)")
+  # println("$(particle.x) $(particle.y)")
+  x = UInt64(floor(particle.x))
+  y = UInt64(floor(particle.y))
+  y_idx = y + 1
+  x_idx = x + 1
+  # println("$(x_idx), $(y_idx)")
+  # println("x: $(x_idx - 1) y: $(y_idx - 1)")
   rel_x = particle.x - x
   rel_y = particle.y - y
-  tmp_fx, tmp_fy = compute_coulomb(rel_x, rel_y, particle.q, q_grid[x, y])
+  tmp_fx, tmp_fy = compute_coulomb(rel_x, rel_y, particle.q, q_grid[x_idx, y_idx])
   tmp_res_x += tmp_fx
   tmp_res_y += tmp_fy
 
-  tmp_fx, tmp_fy = compute_coulomb(rel_x, rel_y, particle.q, q_grid[x, y])
+  tmp_fx, tmp_fy = compute_coulomb(rel_x, 1.0 - rel_y, particle.q, q_grid[x_idx, y_idx + 1])
   tmp_res_x += tmp_fx
   tmp_res_y -= tmp_fy
 
-  tmp_fx, tmp_fy = compute_coulomb(rel_x, rel_y, particle.q, q_grid[x, y])
+  tmp_fx, tmp_fy = compute_coulomb(1.0 - rel_x, rel_y, particle.q, q_grid[x_idx + 1, y_idx])
   tmp_res_x -= tmp_fx
   tmp_res_y += tmp_fy
 
-  tmp_fx, tmp_fy = compute_coulomb(rel_x, rel_y, particle.q, q_grid[x, y])
+  tmp_fx, tmp_fy = compute_coulomb(1.0 - rel_x, 1.0 - rel_y, particle.q, q_grid[x_idx + 1, y_idx + 1])
   tmp_res_x -= tmp_fx
   tmp_res_y -= tmp_fy
 
@@ -166,17 +201,18 @@ function compute_total_force(particle, q_grid)
 end
 
 function verify_particle(particle, iterations, q_grid, grid_dimension)
-  y = UInt64(floor(particle.y0))
-  x = UInt64(floor(particle.x0))
+  y = UInt64(floor(particle.y0)) + 1
+  x = UInt64(floor(particle.x0)) + 1
 
   disp = (iterations + 1) * (2 * particle.k + 1)
   x_final = ((particle.q * q_grid[x, y]) > 0) ? particle.x0 + disp : particle.x0 - disp
   y_final = particle.y0 + particle.m * (iterations + 1)
 
-  x_periodic = x_final + (iterations + 1) * (2 * particle.k + 1) * grid_dimension % grid_dimension
-  y_periodic = y_final + (iterations + 1) * abs(particle.m) * grid_dimension % grid_dimension
+  x_periodic = (x_final + (iterations + 1) * (2 * particle.k + 1) * grid_dimension) % grid_dimension
+  y_periodic = (y_final + (iterations + 1) * abs(particle.m) * grid_dimension) % grid_dimension
 
-  if abs(particle.x - x_periodic) > epsilon || abs(particle.y - y_periodic) > epsilon
+  if (abs(particle.x - x_periodic) > epsilon) || (abs(particle.y - y_periodic) > epsilon)
+    # println("$(particle.x - x_periodic) $(particle.y - y_periodic)")
     return 0
   end
   return 1
@@ -274,19 +310,20 @@ function main()
 
   println("Number of particles placed     = $(n_placed)")
 
-  for iter=1:iterations
-    if iter == 2
+  id = 1
+  for iter=0:iterations
+    if iter == 1
       tick()
     end
     for pi=1:n_placed
       fx, fy = compute_total_force(particles[pi], q_grid)
       ax = fx * MASS_INV
       ay = fy * MASS_INV
-      particles[pi].x = 1 + (particles[pi].x + particles[pi].v_x * DT + 0.5 * ax * DT * DT + grid_dimensions) % grid_dimensions
-      particles[pi].y = 1 + (particles[pi].y + particles[pi].v_y * DT + 0.5 * ay * DT * DT + grid_dimensions) % grid_dimensions
-
-      particles[pi].v_x = ax * DT
-      particles[pi].v_y = ay * DT
+      particles[pi].x = (particles[pi].x + particles[pi].v_x * DT + 0.5 * ax * DT * DT + grid_dimensions) % grid_dimensions
+      # println("$(iter) $(particles[pi].x) $(particles[pi].v_x) $(ax)")
+      particles[pi].y = (particles[pi].y + particles[pi].v_y * DT + 0.5 * ay * DT * DT + grid_dimensions) % grid_dimensions
+      particles[pi].v_x += ax * DT
+      particles[pi].v_y += ay * DT
     end
   end
 
