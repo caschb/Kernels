@@ -1,5 +1,3 @@
-using TickTock
-
 const global MASS_INV = 1.0
 const global Q = 1.0
 const global epsilon = 0.00001
@@ -160,7 +158,6 @@ function compute_coulomb(x_dist, y_dist, q1, q2)
   f_coulomb = q1 * q2 / r2
   fx = f_coulomb * x_dist / r
   fy = f_coulomb * y_dist / r
-  # println("r2: $(r2) f_coulomb: $(f_coulomb) fx: $(fx), fy: $(fy) q1: $(q1) q2: $(q2)")
 
   return fx, fy
 
@@ -169,15 +166,15 @@ end
 function compute_total_force(particle, q_grid)
   tmp_res_x = 0.0
   tmp_res_y = 0.0
-  # println("$(particle.x) $(particle.y)")
+
   x = UInt64(floor(particle.x))
   y = UInt64(floor(particle.y))
   y_idx = y + 1
   x_idx = x + 1
-  # println("$(x_idx), $(y_idx)")
-  # println("x: $(x_idx - 1) y: $(y_idx - 1)")
+
   rel_x = particle.x - x
   rel_y = particle.y - y
+
   tmp_fx, tmp_fy = compute_coulomb(rel_x, rel_y, particle.q, q_grid[x_idx, y_idx])
   tmp_res_x += tmp_fx
   tmp_res_y += tmp_fy
@@ -213,10 +210,20 @@ function verify_particle(particle, iterations, q_grid, grid_dimension)
 
   if (abs(particle.x - x_periodic) > epsilon) || (abs(particle.y - y_periodic) > epsilon)
     # println("$(particle.x - x_periodic) $(particle.y - y_periodic)")
-    return 0
+    return false
   end
-  return 1
+  return true
 
+end
+
+function process_particles()
+  fx, fy = compute_total_force(particles[pi], q_grid)
+  ax = fx * MASS_INV
+  ay = fy * MASS_INV
+  particles[pi].x = (particles[pi].x + particles[pi].v_x * DT + 0.5 * ax * DT * DT + grid_dimensions) % grid_dimensions
+  particles[pi].y = (particles[pi].y + particles[pi].v_y * DT + 0.5 * ay * DT * DT + grid_dimensions) % grid_dimensions
+  particles[pi].v_x += ax * DT
+  particles[pi].v_y += ay * DT
 end
 
 function main()
@@ -309,33 +316,25 @@ function main()
   end
 
   println("Number of particles placed     = $(n_placed)")
-
-  id = 1
-  for iter=0:iterations
-    if iter == 1
-      tick()
-    end
+  precompile(compute_coulomb, (Float64, Float64, Float64, Float64))
+  precompile(compute_total_force, (Particle, Matrix{Float64}))
+  pic_time = @elapsed for iter=0:iterations
     for pi=1:n_placed
       fx, fy = compute_total_force(particles[pi], q_grid)
       ax = fx * MASS_INV
       ay = fy * MASS_INV
-      particles[pi].x = (particles[pi].x + particles[pi].v_x * DT + 0.5 * ax * DT * DT + grid_dimensions) % grid_dimensions
-      # println("$(iter) $(particles[pi].x) $(particles[pi].v_x) $(ax)")
-      particles[pi].y = (particles[pi].y + particles[pi].v_y * DT + 0.5 * ay * DT * DT + grid_dimensions) % grid_dimensions
-      particles[pi].v_x += ax * DT
-      particles[pi].v_y += ay * DT
+      @inbounds particles[pi].x = (particles[pi].x + particles[pi].v_x * DT + 0.5 * ax * DT * DT + grid_dimensions) % grid_dimensions
+      @inbounds particles[pi].y = (particles[pi].y + particles[pi].v_y * DT + 0.5 * ay * DT * DT + grid_dimensions) % grid_dimensions
+      @inbounds particles[pi].v_x += ax * DT
+      @inbounds particles[pi].v_y += ay * DT
     end
   end
-
-  pic_time = tok()
-
-  correctness = 1
-  for pi=1:n_placed
-    correctness *= verify_particle(particles[pi], iterations, q_grid, grid_dimensions)
-  end
+  
+  correctness = all(part->verify_particle(part, iterations, q_grid, grid_dimensions), particles)
 
   if correctness == 1
     println("Solution validates")
+    println("time: $(pic_time)")
     avg_time = n_placed * iterations / pic_time
     println("Rate (Mparticles_moved/s): $(1.0e-6 * avg_time)")
   else
@@ -343,6 +342,5 @@ function main()
   end
 
 end
-
 
 main()
