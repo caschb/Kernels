@@ -1,10 +1,10 @@
-const global MASS_INV = 1.0
-const global Q = 1.0
-const global epsilon = 0.00001
-const global DT = 1.0
+const global MASS_INV::Float64 = 1.0
+const global Q::Float64 = 1.0
+const global epsilon::Float64 = 0.00001
+const global DT::Float64 = 1.0
 
-const global REL_X = 0.5
-const global REL_Y = 0.5
+const global REL_X::Float64 = 0.5
+const global REL_Y::Float64 = 0.5
 const global random_seed::UInt64 = 27182818285
 const global LCG_a::UInt64 = 6364136223846793005
 const global LCG_c::UInt64 = 1442695040888963407
@@ -64,7 +64,7 @@ function bad_patch(patch::BoundingBox, patch_contain::BoundingBox)
 end
 
 function initialize_grid(length)
-  q_grid = zeros(Float64, length+1, length+1)
+  q_grid = zeros(Float64, length + 1, length + 1)
   for i in 1:(length+1)
     for j in 1:(length+1)
       q_grid[i, j] = (i - 1) % 2 == 1 ? -Q : Q
@@ -74,7 +74,7 @@ function initialize_grid(length)
 end
 
 function finish_distribution(n_placed, particles)
-  for pi=1:n_placed
+  for pi = 1:n_placed
     x_coord = particles[pi].x
     y_coord = particles[pi].y
     rel_x = x_coord % 1.0
@@ -83,12 +83,12 @@ function finish_distribution(n_placed, particles)
     r1_sq = rel_y * rel_y + rel_x * rel_x
     r2_sq = rel_y * rel_y + (1.0 - rel_x) * (1.0 - rel_x)
     cos_theta = rel_x / sqrt(r1_sq)
-    cos_phi = (1.0 - rel_x)/sqrt(r2_sq)
-    base_charge = 1.0 / ((DT * DT) * Q * (cos_theta/r1_sq + cos_phi/r2_sq))
+    cos_phi = (1.0 - rel_x) / sqrt(r2_sq)
+    base_charge = 1.0 / ((DT * DT) * Q * (cos_theta / r1_sq + cos_phi / r2_sq))
 
     particles[pi].v_x = 0.0
     particles[pi].v_y = particles[pi].m / DT
-    particles[pi].q = (x%2 == 0) ? (2 * particles[pi].k + 1) * base_charge : -1.0 * (2 * particles[pi].k + 1) * base_charge
+    particles[pi].q = (x % 2 == 0) ? (2 * particles[pi].k + 1) * base_charge : -1.0 * (2 * particles[pi].k + 1) * base_charge
     particles[pi].x0 = x_coord
     particles[pi].y0 = y_coord
   end
@@ -100,9 +100,9 @@ function lcg_next(bound, seed)
 end
 
 function random_draw(mu, seed)
-  two_pi = 2.0*3.14159265358979323846
+  two_pi = 2.0 * 3.14159265358979323846
   rand_max = typemax(UInt64)
-  rand_div = 1/rand_max
+  rand_div = 1 / rand_max
   denominator = typemax(UInt32)
   if mu >= 1.0
     sigma = mu * 0.15
@@ -112,11 +112,11 @@ function random_draw(mu, seed)
     u1 = val1 * rand_div
 
     z0 = sqrt(-2.0 * log(u0)) * cos(two_pi * u1)
-    z1 = sqrt(-2.0 * log(u0)) * sin(two_pi * u1)
+    _ = sqrt(-2.0 * log(u0)) * sin(two_pi * u1)
     return UInt64(floor(z0 * sigma + mu + 0.5)), seed
   else
     numerator = UInt32(floor(mu * denominator))
-    i0, seed = lcg_next(denominator, seed)
+    _, seed = lcg_next(denominator, seed)
     i1, seed = lcg_next(denominator, seed)
 
     return i1 <= numerator ? 1 : 0, seed
@@ -124,22 +124,22 @@ function random_draw(mu, seed)
 end
 
 function initialize_geometric(n_input, L, rho, k, m)
-  A = n_input * ((1.0 - rho) / (1.0-(rho ^ L))) / L
+  A = n_input * ((1.0 - rho) / (1.0 - (rho^L))) / L
   n_placed = 0
   seed = random_seed
-  for x=0:(L-1)
-    for y=0:(L-1)
-      new_amount, seed = random_draw(A * rho ^ x, seed)
+  for x = 0:(L-1)
+    for _ = 0:(L-1)
+      new_amount, seed = random_draw(A * rho^x, seed)
       n_placed += new_amount
     end
   end
   particles = [Particle(0, 0, 0, 0, 0, 0, 0, 0, 0) for i = 1:n_placed]
   seed = random_seed
   pi = 1
-  for x=0:(L-1)
-    for y=0:(L-1)
-      actual_particles, seed = random_draw(A * rho ^ x, seed)
-      for p=1:actual_particles
+  for x = 0:(L-1)
+    for y = 0:(L-1)
+      actual_particles, seed = random_draw(A * rho^x, seed)
+      for _ = 1:actual_particles
         particles[pi].x = x + REL_X
         particles[pi].y = y + REL_Y
         particles[pi].k = k
@@ -152,7 +152,7 @@ function initialize_geometric(n_input, L, rho, k, m)
   return particles, n_placed
 end
 
-function compute_coulomb(x_dist, y_dist, q1, q2)
+@inline function compute_coulomb(x_dist, y_dist, q1, q2)
   r2 = x_dist * x_dist + y_dist * y_dist
   r = sqrt(r2)
   f_coulomb = q1 * q2 / r2
@@ -163,7 +163,7 @@ function compute_coulomb(x_dist, y_dist, q1, q2)
 
 end
 
-function compute_total_force(particle, q_grid)
+@inline function compute_total_force(particle, q_grid)
   tmp_res_x = 0.0
   tmp_res_y = 0.0
 
@@ -179,15 +179,15 @@ function compute_total_force(particle, q_grid)
   tmp_res_x += tmp_fx
   tmp_res_y += tmp_fy
 
-  tmp_fx, tmp_fy = compute_coulomb(rel_x, 1.0 - rel_y, particle.q, q_grid[x_idx, y_idx + 1])
+  tmp_fx, tmp_fy = compute_coulomb(rel_x, 1.0 - rel_y, particle.q, q_grid[x_idx, y_idx+1])
   tmp_res_x += tmp_fx
   tmp_res_y -= tmp_fy
 
-  tmp_fx, tmp_fy = compute_coulomb(1.0 - rel_x, rel_y, particle.q, q_grid[x_idx + 1, y_idx])
+  tmp_fx, tmp_fy = compute_coulomb(1.0 - rel_x, rel_y, particle.q, q_grid[x_idx+1, y_idx])
   tmp_res_x -= tmp_fx
   tmp_res_y += tmp_fy
 
-  tmp_fx, tmp_fy = compute_coulomb(1.0 - rel_x, 1.0 - rel_y, particle.q, q_grid[x_idx + 1, y_idx + 1])
+  tmp_fx, tmp_fy = compute_coulomb(1.0 - rel_x, 1.0 - rel_y, particle.q, q_grid[x_idx+1, y_idx+1])
   tmp_res_x -= tmp_fx
   tmp_res_y -= tmp_fy
 
@@ -209,26 +209,15 @@ function verify_particle(particle, iterations, q_grid, grid_dimension)
   y_periodic = (y_final + (iterations + 1) * abs(particle.m) * grid_dimension) % grid_dimension
 
   if (abs(particle.x - x_periodic) > epsilon) || (abs(particle.y - y_periodic) > epsilon)
-    # println("$(particle.x - x_periodic) $(particle.y - y_periodic)")
     return false
   end
   return true
 
 end
 
-function process_particles()
-  fx, fy = compute_total_force(particles[pi], q_grid)
-  ax = fx * MASS_INV
-  ay = fy * MASS_INV
-  particles[pi].x = (particles[pi].x + particles[pi].v_x * DT + 0.5 * ax * DT * DT + grid_dimensions) % grid_dimensions
-  particles[pi].y = (particles[pi].y + particles[pi].v_y * DT + 0.5 * ay * DT * DT + grid_dimensions) % grid_dimensions
-  particles[pi].v_x += ax * DT
-  particles[pi].v_y += ay * DT
-end
-
-function main()
+function main(arg_vector::Vector{String})
   println("Julia Particle-in-Cell execution on 2D grid")
-  if length(ARGS) < 6
+  if length(arg_vector) < 6
     println("Usage: julia $(PROGRAM_FILE) <#simulation steps> <grid size> <#particles> <k (particle charge semi-increment)> <m (vertical particle velocity)> <init mode> <init parameters>")
     println("init mode \"GEOMETRIC\"  parameters: <attenuation factor>")
     println("          \"SINUSOIDAL\" parameters: none")
@@ -237,52 +226,52 @@ function main()
     exit(0)
   end
 
-  iterations = parse(UInt64, ARGS[1])
+  iterations = parse(UInt64, arg_vector[1])
   if iterations < 1
     println("ERROR: Number of iterations must be positive: $(iterations)")
     exit(-1)
   end
 
-  grid_dimensions = parse(UInt64, ARGS[2])
+  grid_dimensions = parse(UInt64, arg_vector[2])
   if grid_dimensions < 1 || grid_dimensions % 2 == 1
     println("ERROR: Number of grid cells must be positive and even: $(grid_dimensions)")
     exit(-1)
   end
 
   grid_patch = BoundingBox(0, grid_dimensions + 1, 0, grid_dimensions + 1)
-  number_of_particles = parse(UInt64, ARGS[3])
+  number_of_particles = parse(UInt64, arg_vector[3])
   if number_of_particles < 1
     println("ERROR: Number of particles must be positive: $(number_of_particles)")
     exit(-1)
   end
 
-  k = parse(UInt64, ARGS[4])
-  m = parse(Int64, ARGS[5])
+  k = parse(UInt64, arg_vector[4])
+  m = parse(Int64, arg_vector[5])
 
-  particle_mode = parse_init_type(ARGS[6])
+  particle_mode = parse_init_type(arg_vector[6])
   if particle_mode == GEOMETRIC
-    if length(ARGS) < 7
+    if length(arg_vector) < 7
       println("ERROR: Not enough arguments for GEOMETRIC")
       exit(-1)
     end
-    rho = parse(Float64, ARGS[7])
+    rho = parse(Float64, arg_vector[7])
   elseif particle_mode == LINEAR
-    if length(ARGS) < 8
+    if length(arg_vector) < 8
       println("ERROR: Not enough arguments for LINEAR initialization")
       exit(-1)
     end
-    alpha = parse(Float64, ARGS[7])
-    beta = parse(Float64, ARGS[8])
+    alpha = parse(Float64, arg_vector[7])
+    beta = parse(Float64, arg_vector[8])
     if beta < 0 || beta < alpha
       println("ERROR: linear profile gives negative particle density")
       exit(-1)
     end
   elseif particle_mode == PATCH
-    if length(ARGS) < 10
+    if length(arg_vector) < 10
       println("ERROR: Not enough arguments for PATCH initialization")
       exit(-1)
     end
-    patch_dims = map(x->parse(UInt64, x), ARGS[7:10])
+    patch_dims = map(x -> parse(UInt64, x), arg_vector[7:10])
     init_patch = BoundingBox(patch_dims...)
     if bad_patch(init_patch, grid_patch)
       println("ERROR: inconsistent initial patch")
@@ -318,19 +307,22 @@ function main()
   println("Number of particles placed     = $(n_placed)")
   precompile(compute_coulomb, (Float64, Float64, Float64, Float64))
   precompile(compute_total_force, (Particle, Matrix{Float64}))
-  pic_time = @elapsed for iter=0:iterations
-    for pi=1:n_placed
-      fx, fy = compute_total_force(particles[pi], q_grid)
+  mul_const = DT * DT * 0.5
+
+  pic_time = @elapsed for i = 0:iterations
+    for pi = 1:n_placed
+      # println("$(i): $(pi)")
+      @inbounds fx, fy = compute_total_force(particles[pi], q_grid)
       ax = fx * MASS_INV
       ay = fy * MASS_INV
-      @inbounds particles[pi].x = (particles[pi].x + particles[pi].v_x * DT + 0.5 * ax * DT * DT + grid_dimensions) % grid_dimensions
-      @inbounds particles[pi].y = (particles[pi].y + particles[pi].v_y * DT + 0.5 * ay * DT * DT + grid_dimensions) % grid_dimensions
+      @inbounds particles[pi].x = (particles[pi].x + particles[pi].v_x * DT + ax * mul_const + grid_dimensions) % grid_dimensions
+      @inbounds particles[pi].y = (particles[pi].y + particles[pi].v_y * DT + ay * mul_const + grid_dimensions) % grid_dimensions
       @inbounds particles[pi].v_x += ax * DT
       @inbounds particles[pi].v_y += ay * DT
     end
   end
-  
-  correctness = all(part->verify_particle(part, iterations, q_grid, grid_dimensions), particles)
+
+  correctness = all(part -> verify_particle(part, iterations, q_grid, grid_dimensions), particles)
 
   if correctness == 1
     println("Solution validates")
@@ -340,7 +332,8 @@ function main()
   else
     println("Solution does not validate")
   end
-
+  println(Threads.nthreads())
 end
 
-main()
+main(ARGS)
+main(ARGS)
