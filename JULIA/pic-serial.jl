@@ -1,3 +1,4 @@
+using Polyester
 const global MASS_INV::Float64 = 1.0
 const global Q::Float64 = 1.0
 const global epsilon::Float64 = 0.00001
@@ -310,8 +311,7 @@ function main(arg_vector::Vector{String})
   mul_const = DT * DT * 0.5
 
   pic_time = @elapsed for i = 0:iterations
-    for pi = 1:n_placed
-      # println("$(i): $(pi)")
+    @batch for pi = 1:n_placed
       @inbounds fx, fy = compute_total_force(particles[pi], q_grid)
       ax = fx * MASS_INV
       ay = fy * MASS_INV
@@ -335,5 +335,4 @@ function main(arg_vector::Vector{String})
   println(Threads.nthreads())
 end
 
-main(ARGS)
 main(ARGS)
