@@ -438,6 +438,8 @@ RUST/transpose-rayon/Cargo.lock
 RUST/transpose-rayon/target/
 RUST/pic/Cargo.lock
 RUST/pic/target/
+RUST/pic-mpi/Cargo.lock
+RUST/pic-mpi/target/
 RUST/common/Cargo.lock
 RUST/common/target/
 SERIAL/AMR/amr
