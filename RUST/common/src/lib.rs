@@ -35,19 +35,28 @@ use std::f64::consts::PI;
 const LCG_A: u64 = 6364136223846793005;
 const LCG_C: u64 = 1442695040888963407;
 const LCG_SEED: u64 = 27182818285;
+const NMAX: u64 = 64;
 
 #[derive(Debug)]
 pub struct RandomDraw {
     pub lcg_seed: u64,
+    pub lcg_a: [u64; NMAX as usize],
 }
 
 impl RandomDraw {
     pub fn new() -> Self {
-        RandomDraw { lcg_seed: LCG_SEED }
+        RandomDraw {
+            lcg_seed: LCG_SEED,
+            lcg_a: [0u64; NMAX as usize],
+        }
     }
 
     pub fn lcg_init(&mut self) {
         self.lcg_seed = LCG_SEED;
+        self.lcg_a[0] = LCG_A;
+        for i in 1..self.lcg_a.len() {
+            self.lcg_a[i] = self.lcg_a[i - 1].pow(2);
+        }
     }
 
     pub fn lcg_next(&mut self, bound: u64) -> u64 {
@@ -55,6 +64,77 @@ impl RandomDraw {
         let c = LCG_C;
         self.lcg_seed = self.lcg_seed.wrapping_mul(a).wrapping_add(c);
         self.lcg_seed % bound
+    }
+
+    fn tail(&self, mut x: u64) -> u64 {
+        if x == 0 {
+            return x;
+        }
+        let mut result = 1u64;
+        let x2 = x;
+        while x > 0 {
+            x >>= 1;
+            result <<= 1;
+        }
+        return x2 - result;
+    }
+
+    fn sum_power(&self, k: u64) -> u64 {
+        if k == 0 {
+            return LCG_A;
+        } else {
+            return self.sum_power(k - 1) * (1 + self.lcg_a[(k - 1) as usize]);
+        }
+    }
+
+    fn log(&self, mut n: u64) -> u64 {
+        let mut result = 0u64;
+        while n > 0 {
+            n >>= 1;
+            result += 1;
+        }
+        result
+    }
+
+    fn sumk(&self, n: u64) -> u64 {
+        if n == 0 {
+            return 0u64;
+        }
+        let head = self.sum_power(self.log(n));
+        let tail_n = self.tail(n);
+        if tail_n == 0 {
+            return head;
+        }
+        head + self.lcg_a[self.log(n) as usize] * self.sumk(tail_n)
+    }
+
+    pub fn lcg_jump(&mut self, m: u64, bound: u64) {
+        let mut lcg_power = [0u64, NMAX];
+        self.lcg_seed = LCG_SEED;
+
+        match m {
+            0 => return,
+            1 => {
+                self.lcg_next(bound);
+                return;
+            }
+            _ => (),
+        };
+        let mut mm = m;
+        let mut index = 0;
+
+        while mm > 0 {
+            lcg_power[index] = mm & 1;
+            index += 1;
+            mm >>= 1;
+        }
+        let mut s_part = 1u64;
+        for i in 0..index {
+            if lcg_power[i] != 0 {
+                s_part *= self.lcg_a[i];
+            }
+        }
+        self.lcg_seed = s_part * self.lcg_seed + (self.sumk(m - 1) + 1) * LCG_C;
     }
 
     pub fn random_draw(&mut self, mu: f64) -> u64 {
