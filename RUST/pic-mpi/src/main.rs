@@ -56,7 +56,8 @@ HISTORY: - Written by Evangelos Georganas, August 2015.
 
 use clap::{Parser, Subcommand};
 use mpi;
-use mpi::traits::Communicator;
+use mpi::collective::SystemOperation;
+use mpi::traits::*;
 use std::f64::consts::PI;
 use std::time::Instant;
 
@@ -150,48 +151,60 @@ struct Particle {
     y0: f64,
     k: f64,
     m: f64,
+    id: usize,
 }
 
 #[derive(Debug)]
 struct Grid<T> {
     data: Vec<T>,
-    cols: usize,
+    _cols: usize,
+    rows: usize,
 }
 
 impl<T: Copy> Grid<T> {
-    fn new(default_value: T, dimensions: usize) -> Self {
+    fn new(default_value: T, cols: usize, rows: usize) -> Self {
         Grid::<T> {
-            data: vec![default_value; dimensions * dimensions],
-            cols: dimensions,
+            data: vec![default_value; cols * rows],
+            _cols: cols,
+            rows,
         }
     }
 
     fn get(&self, col_idx: usize, row_idx: usize) -> T {
-        let index = col_idx * self.cols + row_idx;
+        let index = col_idx * self.rows + row_idx;
         self.data[index]
     }
 
     fn set(&mut self, col_idx: usize, row_idx: usize, value: T) {
-        let index = col_idx * self.cols + row_idx;
+        let index = col_idx * self.rows + row_idx;
         self.data[index] = value;
     }
 }
 
-fn initialize_grid(grid_size: usize) -> Grid<f64> {
-    let mut grid = Grid::<f64>::new(0f64, grid_size + 1);
-    for col_idx in 0..(grid_size + 1) {
-        for row_idx in 0..(grid_size + 1) {
+fn initialize_grid(tile: &BoundingBox) -> Grid<f64> {
+    let n_cols = tile.right - tile.left + 1;
+    let n_rows = tile.top - tile.bottom + 1;
+    let mut grid = Grid::<f64>::new(0f64, n_cols as usize, n_rows as usize);
+    for col_idx in tile.left..(tile.right + 1) {
+        for row_idx in tile.bottom..(tile.top + 1) {
             let value = match col_idx % 2 {
                 0 => Q,
                 _ => -Q,
             };
-            grid.set(col_idx, row_idx, value);
+            grid.set(
+                (col_idx - tile.left) as usize,
+                (row_idx - tile.bottom) as usize,
+                value,
+            );
         }
     }
     grid
 }
 
-fn finalize_distribution(particles: &mut [Particle]) {
+fn finalize_distribution(particles: &mut [Particle], comm: &mpi::topology::SimpleCommunicator) {
+    let mut total_size: usize = 42;
+    comm.scan_into(&particles.len(), &mut total_size, SystemOperation::sum());
+    let mut id = total_size - particles.len() + 1;
     for particle in particles {
         let x_coord = particle.x;
         let y_coord = particle.y;
@@ -215,6 +228,8 @@ fn finalize_distribution(particles: &mut [Particle]) {
         };
         particle.x0 = x_coord;
         particle.y0 = y_coord;
+        particle.id = id;
+        id += 1;
     }
 }
 
@@ -225,6 +240,7 @@ fn initialize_linear(
     beta: f64,
     horizontal_speed: f64,
     vertical_speed: f64,
+    comm: &mpi::topology::SimpleCommunicator,
 ) -> Vec<Particle> {
     let mut dice = common::RandomDraw::new();
     let mut particles = Vec::<Particle>::new();
@@ -248,7 +264,7 @@ fn initialize_linear(
             }
         }
     }
-    finalize_distribution(particles.as_mut_slice());
+    finalize_distribution(particles.as_mut_slice(), comm);
     particles
 }
 
@@ -258,6 +274,7 @@ fn initialize_patch(
     patch: &BoundingBox,
     horizontal_speed: f64,
     vertical_speed: f64,
+    comm: &mpi::topology::SimpleCommunicator,
 ) -> Vec<Particle> {
     let mut dice = common::RandomDraw::new();
 
@@ -284,7 +301,7 @@ fn initialize_patch(
             }
         }
     }
-    finalize_distribution(particles.as_mut_slice());
+    finalize_distribution(particles.as_mut_slice(), comm);
 
     particles
 }
@@ -295,6 +312,7 @@ fn initialize_geometric(
     rho: f64,
     horizontal_speed: f64,
     vertical_speed: f64,
+    comm: &mpi::topology::SimpleCommunicator,
 ) -> Vec<Particle> {
     let mut dice = common::RandomDraw::new();
 
@@ -318,27 +336,31 @@ fn initialize_geometric(
         }
     }
 
-    finalize_distribution(particles.as_mut_slice());
+    finalize_distribution(particles.as_mut_slice(), comm);
     particles
 }
 
 fn initialize_sinusoidal(
     n_input: u64,
     grid_size: u64,
+    tile: &BoundingBox,
     horizontal_speed: f64,
     vertical_speed: f64,
+    comm: &mpi::topology::SimpleCommunicator,
 ) -> Vec<Particle> {
     let mut dice = common::RandomDraw::new();
-    let step = PI / (grid_size as f64);
     dice.lcg_init();
 
+    let step = PI / (grid_size as f64);
     let mut particles = Vec::<Particle>::new();
 
-    for x in 0..grid_size {
+    for x in tile.left..tile.right {
+        let start_index = tile.bottom + x * grid_size;
+        dice.lcg_jump(2 * start_index, 0);
         for y in 0..grid_size {
             let val = (x as f64 * step).cos();
             let part_num =
-                dice.random_draw(2.0 * n_input as f64 * val * val / (grid_size * grid_size) as f64);
+                dice.random_draw(2.0 * n_input as f64 * val.powi(2) / grid_size.pow(2) as f64);
             for _p in 0..part_num {
                 let mut particle = Particle::default();
                 particle.x = x as f64 + REL_X;
@@ -350,7 +372,7 @@ fn initialize_sinusoidal(
         }
     }
 
-    finalize_distribution(particles.as_mut_slice());
+    finalize_distribution(particles.as_mut_slice(), comm);
     particles
 }
 
@@ -425,17 +447,61 @@ fn verify_particle(
     }
 }
 
+fn find_owner_simple(
+    particle: &Particle,
+    width: u64,
+    height: u64,
+    num_procs_x: u64,
+    _i_crit: u64,
+    _j_crit: u64,
+    _i_leftover: u64,
+    _j_leftover: u64,
+) -> u64 {
+    let x = particle.x.floor() as u64;
+    let y = particle.y.floor() as u64;
+    let id_x = x / width;
+    let id_y = y / height;
+    let proc_id = id_y * num_procs_x + id_x;
+
+    proc_id
+}
+fn find_owner_general(
+    particle: &Particle,
+    width: u64,
+    height: u64,
+    num_procs_x: u64,
+    i_crit: u64,
+    j_crit: u64,
+    i_leftover: u64,
+    j_leftover: u64,
+) -> u64 {
+    let x = particle.x.floor() as u64;
+    let y = particle.y.floor() as u64;
+
+    let id_x = match x < i_crit {
+        true => x / (width + 1),
+        false => i_leftover + (x - i_crit) / width,
+    };
+
+    let id_y = match y < j_crit {
+        true => y / (height + 1),
+        false => j_leftover + (y - j_crit) / height,
+    };
+    let proc_id = id_y * num_procs_x + id_x;
+    proc_id
+}
+
 fn main() {
     let args = Args::parse();
     let universe = mpi::initialize().expect("Error initializing MPI");
     let world = universe.world();
-    let my_rank = world.rank();
-    let comm_size = world.size();
+    let my_rank = world.rank() as u64;
+    let num_procs = world.size() as u64;
 
     if my_rank == 0 {
         println!("Parallel Research Kernels");
         println!("MPI Particle-in-Cell execution on 2D grid");
-        println!("Number of ranks                    = {}", comm_size);
+        println!("Number of ranks                    = {}", num_procs);
         println!("Load balancing                     = None");
     }
 
@@ -446,24 +512,23 @@ fn main() {
         bottom: 0,
         top: grid_size,
     };
-    let mut num_proxs_y = 0i32;
-    let mut num_proxs_x = 0i32;
-    for procs in (1..((comm_size).isqrt() + 1)).rev() {
+    let mut num_procs_y = 0u64;
+    let mut num_procs_x = 0u64;
+    for procs in (1..((num_procs).isqrt() + 1)).rev() {
         // if my_rank == 0 {
         //     println!("comm_size, procs: {}, {}", comm_size, procs)
         // }
-        if comm_size % procs == 0 {
-            num_proxs_y = comm_size / procs;
-            num_proxs_x = procs;
+        if num_procs % procs == 0 {
+            num_procs_y = num_procs / procs;
+            num_procs_x = procs;
             break;
         }
     }
-    let grid = initialize_grid(grid_size as usize);
     if my_rank == 0 {
         println!("Grid size                          = {}", args.grid_size);
         println!(
             "Tiles in x/y-direction             = {}/{}",
-            num_proxs_x, num_proxs_y
+            num_procs_x, num_procs_y
         );
         println!(
             "Number of particles requested      = {}",
@@ -507,28 +572,132 @@ fn main() {
             args.vertical_particle_velocity
         );
     }
-    let my_rank_x = my_rank % num_proxs_x;
-    let my_rank_y = my_rank / num_proxs_x;
+    let my_rank_x = my_rank % num_procs_x;
+    let my_rank_y = my_rank / num_procs_x;
 
     let k = args.particle_charge_semi_increment as f64;
     let m = args.vertical_particle_velocity as f64;
 
-    let width = grid_size / (num_proxs_x as u64);
+    let width = grid_size / num_procs_x;
     if (width as f64) < (2.0 * k) {
         if my_rank == 0 {
             panic!(
-                "k-value too large {}, must be no greater than {}",
+                "k-value too large: {}, must be no greater than {}",
                 k,
                 width / 2
             );
         }
     }
+    let i_leftover = grid_size % num_procs_x;
+
+    let i_start = match my_rank_x < i_leftover {
+        true => (width + 1) * my_rank_x,
+        false => (width + 1) * i_leftover + width * (my_rank_x - i_leftover),
+    };
+
+    let i_end = match my_rank_x < i_leftover {
+        true => i_start + width + 1,
+        false => i_start + width,
+    };
+
+    let i_crit = (width + 1) * i_leftover;
+
+    let height = grid_size / (num_procs_y as u64);
+
+    if (height as f64) < (2.0 * m) {
+        if my_rank == 0 {
+            panic!(
+                "m-value too large: {}, must not be greater than {}",
+                m, height
+            );
+        }
+    }
+
+    let j_leftover = grid_size % num_procs_y;
+    let j_start = match my_rank_y < j_leftover {
+        true => (height + 1) * my_rank_y,
+        false => (height + 1) * j_leftover + height * (my_rank_y - j_leftover),
+    };
+
+    let j_end = match my_rank_y < j_leftover {
+        true => j_start + height + 1,
+        false => j_start + height,
+    };
+
+    let j_crit = (height + 1) * j_leftover;
+
+    type FindFunc = fn(&Particle, u64, u64, u64, u64, u64, u64, u64) -> u64;
+
+    let find_owner: FindFunc = match i_crit == 0 && j_crit == 0 {
+        true => {
+            if my_rank == 0 {
+                println!("Rank search mode used              = simple");
+            }
+            find_owner_simple
+        }
+        false => {
+            if my_rank == 0 {
+                println!("Rank search mode used              = general");
+            }
+            find_owner_general
+        }
+    };
+
+    let my_tile = BoundingBox {
+        left: i_start,
+        right: i_end,
+        bottom: j_start,
+        top: j_end,
+    };
+
+    let mut nbr = [0u64; 8];
+
+    nbr[0] = match my_rank_x == 0 {
+        true => my_rank + num_procs_x - 1,
+        false => my_rank - 1,
+    };
+    nbr[1] = match my_rank_x == num_procs_x - 1 {
+        true => my_rank - num_procs_x + 1,
+        false => my_rank + 1,
+    };
+    nbr[2] = match my_rank_y == num_procs_y - 1 {
+        true => my_rank + num_procs_x - num_procs,
+        false => my_rank + num_procs_x,
+    };
+    nbr[3] = match my_rank_y == 0 {
+        true => my_rank - num_procs_x + num_procs,
+        false => my_rank - num_procs_x,
+    };
+    nbr[4] = match my_rank_y == num_procs_y - 1 {
+        true => nbr[0] + num_procs_x - num_procs,
+        false => nbr[0] + num_procs_x,
+    };
+    nbr[5] = match my_rank_y == num_procs_y - 1 {
+        true => nbr[1] + num_procs_x - num_procs,
+        false => nbr[1] + num_procs_x,
+    };
+    nbr[6] = match my_rank_y == 0 {
+        true => nbr[0] - num_procs_x + num_procs,
+        false => nbr[0] - num_procs_x,
+    };
+    nbr[7] = match my_rank_y == 0 {
+        true => nbr[1] - num_procs_x + num_procs,
+        false => nbr[1] - num_procs_x,
+    };
+    let grid = initialize_grid(&my_tile);
 
     let mut particles = match args.init_style {
-        InitStyle::Geometric { attenuation_factor } => {
-            initialize_geometric(args.total_particles, grid_size, attenuation_factor, k, m)
+        InitStyle::Geometric { attenuation_factor } => initialize_geometric(
+            args.total_particles,
+            grid_size,
+            attenuation_factor,
+            k,
+            m,
+            &world,
+        ),
+        InitStyle::Sinusoidal => {
+            initialize_sinusoidal(args.total_particles, grid_size, &my_tile, k, m, &world)
         }
-        InitStyle::Sinusoidal => initialize_sinusoidal(args.total_particles, grid_size, k, m),
         InitStyle::Linear {
             negative_slope,
             constant_offset,
@@ -543,6 +712,7 @@ fn main() {
                 constant_offset,
                 k,
                 m,
+                &world,
             )
         }
         InitStyle::Patch {
@@ -560,7 +730,7 @@ fn main() {
             if bad_patch(&patch, &grid_patch) {
                 panic!("ERROR: inconsistent initial patch");
             };
-            initialize_patch(args.total_particles, grid_size, &patch, k, m)
+            initialize_patch(args.total_particles, grid_size, &patch, k, m, &world)
         }
     };
     if my_rank == 0 {
