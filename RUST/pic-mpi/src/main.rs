@@ -67,6 +67,7 @@ const MASS_INV: f64 = 1.0;
 const REL_X: f64 = 0.5;
 const REL_Y: f64 = 0.5;
 const EPSILON: f64 = 0.000001;
+const ROOT_RANK: i32 = 0;
 
 /// Particle initialization mode
 #[derive(Subcommand, Debug, Clone)]
@@ -119,6 +120,7 @@ struct Args {
     init_style: InitStyle,
 }
 
+#[derive(Debug)]
 struct BoundingBox {
     left: u64,
     right: u64,
@@ -140,7 +142,7 @@ fn bad_patch(patch: &BoundingBox, patch_contain: &BoundingBox) -> bool {
     return false;
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 struct Particle {
     x: f64,
     y: f64,
@@ -357,7 +359,7 @@ fn initialize_sinusoidal(
     for x in tile.left..tile.right {
         let start_index = tile.bottom + x * grid_size;
         dice.lcg_jump(2 * start_index, 0);
-        for y in 0..grid_size {
+        for y in tile.bottom..tile.top {
             let val = (x as f64 * step).cos();
             let part_num =
                 dice.random_draw(2.0 * n_input as f64 * val.powi(2) / grid_size.pow(2) as f64);
@@ -490,6 +492,10 @@ fn find_owner_general(
     let proc_id = id_y * num_procs_x + id_x;
     proc_id
 }
+
+// fn add_particle_to_buffer(particle: &Particle, buffer: &Vec<Particle>, position: usize) {
+
+// }
 
 fn main() {
     let args = Args::parse();
@@ -734,28 +740,57 @@ fn main() {
         }
     };
     if my_rank == 0 {
-        println!("Number of particles placed         = {}", particles.len());
+        let mut total_parts = 0;
+        world.process_at_rank(ROOT_RANK).reduce_into_root(
+            &particles.len(),
+            &mut total_parts,
+            SystemOperation::sum(),
+        );
+        println!("Number of particles placed         = {}", total_parts);
+    } else {
+        world
+            .process_at_rank(ROOT_RANK)
+            .reduce_into(&particles.len(), SystemOperation::sum());
     }
     // let timer = Instant::now();
     // let mut t0 = timer.elapsed();
 
-    // for it in 0..args.iterations + 1 {
-    //     if it == 1 {
-    //         t0 = timer.elapsed();
-    //     }
-    //     for particle in particles.iter_mut() {
-    //         let (fx, fy) = compute_total_force(particle, &grid);
-    //         let ax = fx * MASS_INV;
-    //         let ay = fy * MASS_INV;
-    //         let x_disp = particle.x + particle.v_x * DT + 0.5 * ax * DT.powi(2) + grid_size as f64;
-    //         let y_disp = particle.y + particle.v_y * DT + 0.5 * ay * DT.powi(2) + grid_size as f64;
-    //         particle.x = x_disp % grid_size as f64;
-    //         particle.y = y_disp % grid_size as f64;
+    // let mut sendbuf = Vec::<Particle>::with_capacity(10);
 
-    //         particle.v_x += ax * DT;
-    //         particle.v_y += ay * DT;
-    //     }
-    // }
+    // let mut sendbuf = [Vec::<Particle>::with_capacity(10); 8];
+
+    let mut sendbuf: [Vec<Particle>; 8] =
+        core::array::from_fn(|_| Vec::<Particle>::with_capacity(10));
+    let mut recvbuf: [Vec<Particle>; 8] =
+        core::array::from_fn(|_| Vec::<Particle>::with_capacity(10));
+
+    for it in 0..args.iterations + 1 {
+        //     if it == 1 {
+        //         t0 = timer.elapsed();
+        //     }
+        for particle in particles.iter_mut() {
+            let (fx, fy) = compute_total_force(particle, &grid);
+            let ax = fx * MASS_INV;
+            let ay = fy * MASS_INV;
+            let x_disp = particle.x + particle.v_x * DT + 0.5 * ax * DT.powi(2) + grid_size as f64;
+            let y_disp = particle.y + particle.v_y * DT + 0.5 * ay * DT.powi(2) + grid_size as f64;
+            particle.x = x_disp % grid_size as f64;
+            particle.y = y_disp % grid_size as f64;
+
+            particle.v_x += ax * DT;
+            particle.v_y += ay * DT;
+            let owner = find_owner(
+                &particle, width, height, num_procs, i_crit, j_crit, i_leftover, j_leftover,
+            );
+            match owner {
+                0 => sendbuf[0].push(*particle),
+                _ => println!(
+                    "Could not find neighbor owner of particle in tile {}",
+                    owner
+                ),
+            }
+        }
+    }
     // let t1 = timer.elapsed();
     // let dt = (t1.checked_sub(t0)).unwrap();
     // let pic_time = dt.as_secs_f64();

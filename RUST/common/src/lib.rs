@@ -35,19 +35,19 @@ use std::f64::consts::PI;
 const LCG_A: u64 = 6364136223846793005;
 const LCG_C: u64 = 1442695040888963407;
 const LCG_SEED: u64 = 27182818285;
-const NMAX: u64 = 64;
+const NMAX: usize = 64;
 
 #[derive(Debug)]
 pub struct RandomDraw {
     pub lcg_seed: u64,
-    pub lcg_a: [u64; NMAX as usize],
+    pub lcg_a: [u64; NMAX],
 }
 
 impl RandomDraw {
     pub fn new() -> Self {
         RandomDraw {
             lcg_seed: LCG_SEED,
-            lcg_a: [0u64; NMAX as usize],
+            lcg_a: [0u64; NMAX],
         }
     }
 
@@ -72,14 +72,14 @@ impl RandomDraw {
         }
         let mut result = 1u64;
         let x2 = x;
-        while x > 0 {
+        while x > 1 {
             x >>= 1;
             result <<= 1;
         }
         return x2 - result;
     }
 
-    fn sum_power(&self, k: u64) -> u64 {
+    fn sum_power(&self, k: i64) -> u64 {
         if k == 0 {
             return LCG_A;
         } else {
@@ -87,9 +87,9 @@ impl RandomDraw {
         }
     }
 
-    fn log(&self, mut n: u64) -> u64 {
-        let mut result = 0u64;
-        while n > 0 {
+    fn log(&self, mut n: u64) -> i64 {
+        let mut result = 0i64;
+        while n > 1 {
             n >>= 1;
             result += 1;
         }
@@ -109,7 +109,7 @@ impl RandomDraw {
     }
 
     pub fn lcg_jump(&mut self, m: u64, bound: u64) {
-        let mut lcg_power = [0u64, NMAX];
+        let mut lcg_power = [0u64; NMAX];
         self.lcg_seed = LCG_SEED;
 
         match m {
