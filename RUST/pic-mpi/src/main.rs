@@ -57,6 +57,8 @@ HISTORY: - Written by Evangelos Georganas, August 2015.
 use clap::{Parser, Subcommand};
 use mpi;
 use mpi::collective::SystemOperation;
+use mpi::datatype::UserDatatype;
+use mpi::request::RequestCollection;
 use mpi::traits::*;
 use std::f64::consts::PI;
 use std::time::Instant;
@@ -153,7 +155,15 @@ struct Particle {
     y0: f64,
     k: f64,
     m: f64,
-    id: usize,
+    id: f64,
+}
+
+unsafe impl Equivalence for Particle {
+    type Out = UserDatatype;
+
+    fn equivalent_datatype() -> Self::Out {
+        mpi::datatype::UncommittedUserDatatype::contiguous(10, &f64::equivalent_datatype()).commit()
+    }
 }
 
 #[derive(Debug)]
@@ -230,7 +240,7 @@ fn finalize_distribution(particles: &mut [Particle], comm: &mpi::topology::Simpl
         };
         particle.x0 = x_coord;
         particle.y0 = y_coord;
-        particle.id = id;
+        particle.id = id as f64;
         id += 1;
     }
 }
@@ -782,13 +792,42 @@ fn main() {
             let owner = find_owner(
                 &particle, width, height, num_procs, i_crit, j_crit, i_leftover, j_leftover,
             );
-            match owner {
-                0 => sendbuf[0].push(*particle),
-                _ => println!(
+            if owner == nbr[0] {
+                sendbuf[0].push(*particle);
+            } else if owner == nbr[1] {
+                sendbuf[1].push(*particle);
+            } else if owner == nbr[2] {
+                sendbuf[2].push(*particle);
+            } else if owner == nbr[3] {
+                sendbuf[3].push(*particle);
+            } else if owner == nbr[4] {
+                sendbuf[4].push(*particle);
+            } else if owner == nbr[5] {
+                sendbuf[5].push(*particle);
+            } else if owner == nbr[6] {
+                sendbuf[6].push(*particle);
+            } else if owner == nbr[7] {
+                sendbuf[7].push(*particle);
+            } else if owner == nbr[8] {
+                sendbuf[8].push(*particle);
+            } else {
+                panic!(
                     "Could not find neighbor owner of particle in tile {}",
                     owner
-                ),
+                );
             }
+            mpi::request::multiple_scope(
+                16,
+                |scope, coll: &mut RequestCollection<'_, Vec<Particle>>| {
+                    for i in 0..8 {
+                        let sreq = world
+                            .process_at_rank(nbr[i] as i32)
+                            .immediate_send(scope, &sendbuf[i]);
+                        coll.add(sreq);
+                        let rreq = world.this_process().immediate_receive_into(scope, buf);
+                    }
+                },
+            );
         }
     }
     // let t1 = timer.elapsed();
