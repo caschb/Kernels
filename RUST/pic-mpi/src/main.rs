@@ -773,6 +773,8 @@ fn main() {
         core::array::from_fn(|_| Vec::<Particle>::with_capacity(10));
     let mut recvbuf: [Vec<Particle>; 8] =
         core::array::from_fn(|_| Vec::<Particle>::with_capacity(10));
+    let mut send_size: [usize; 8] = [0; 8];
+    let mut recv_size: [usize; 8] = [0; 8];
 
     for it in 0..args.iterations + 1 {
         //     if it == 1 {
@@ -792,42 +794,68 @@ fn main() {
             let owner = find_owner(
                 &particle, width, height, num_procs, i_crit, j_crit, i_leftover, j_leftover,
             );
-            if owner == nbr[0] {
-                sendbuf[0].push(*particle);
-            } else if owner == nbr[1] {
-                sendbuf[1].push(*particle);
-            } else if owner == nbr[2] {
-                sendbuf[2].push(*particle);
-            } else if owner == nbr[3] {
-                sendbuf[3].push(*particle);
-            } else if owner == nbr[4] {
-                sendbuf[4].push(*particle);
-            } else if owner == nbr[5] {
-                sendbuf[5].push(*particle);
-            } else if owner == nbr[6] {
-                sendbuf[6].push(*particle);
-            } else if owner == nbr[7] {
-                sendbuf[7].push(*particle);
-            } else if owner == nbr[8] {
-                sendbuf[8].push(*particle);
-            } else {
-                panic!(
-                    "Could not find neighbor owner of particle in tile {}",
-                    owner
-                );
-            }
-            mpi::request::multiple_scope(
-                16,
-                |scope, coll: &mut RequestCollection<'_, Vec<Particle>>| {
-                    for i in 0..8 {
-                        let sreq = world
-                            .process_at_rank(nbr[i] as i32)
-                            .immediate_send(scope, &sendbuf[i]);
-                        coll.add(sreq);
-                        let rreq = world.this_process().immediate_receive_into(scope, buf);
-                    }
-                },
-            );
+            // if owner == nbr[0] {
+            //     sendbuf[0].push(*particle);
+            // } else if owner == nbr[1] {
+            //     sendbuf[1].push(*particle);
+            // } else if owner == nbr[2] {
+            //     sendbuf[2].push(*particle);
+            // } else if owner == nbr[3] {
+            //     sendbuf[3].push(*particle);
+            // } else if owner == nbr[4] {
+            //     sendbuf[4].push(*particle);
+            // } else if owner == nbr[5] {
+            //     sendbuf[5].push(*particle);
+            // } else if owner == nbr[6] {
+            //     sendbuf[6].push(*particle);
+            // } else if owner == nbr[7] {
+            //     sendbuf[7].push(*particle);
+            // } else {
+            //     panic!(
+            //         "Could not find neighbor owner of particle in tile {}, {:?}",
+            //         owner, nbr
+            //     );
+            // }
+            // for (idx, buf) in sendbuf.iter().enumerate() {
+            //     send_size[idx] = buf.len();
+            // }
+            // for i in 0..num_procs {
+            //     if i == my_rank {
+            //         println!("{}: {:?}\n{:?}", i, send_size, recv_size);
+            //     }
+            //     world.barrier();
+            // }
+            // mpi::request::multiple_scope(16, |scope, coll: &mut RequestCollection<'_, usize>| {
+            //     for (idx, buf_size) in send_size.iter().enumerate() {
+            //         let sreq = world
+            //             .process_at_rank(nbr[idx] as i32)
+            //             .immediate_send(scope, buf_size);
+            //         coll.add(sreq);
+            //     }
+            //     for recv_buf in recv_size.as_mut() {
+            //         let rreq = world.this_process().immediate_receive_into(scope, recv_buf);
+            //         coll.add(rreq);
+            //     }
+            // });
+            // for i in 0..num_procs {
+            //     if i == my_rank {
+            //         println!("{}: {:?}\n{:?}", i, send_size, recv_size);
+            //     }
+            //     world.barrier();
+            // }
+
+            // mpi::request::multiple_scope(
+            //     16,
+            //     |scope, coll: &mut RequestCollection<'_, Vec<Particle>>| {
+            //         for i in 0..8 {
+            //             let sreq = world
+            //                 .process_at_rank(nbr[i] as i32)
+            //                 .immediate_send(scope, &sendbuf[i]);
+            //             coll.add(sreq);
+            //             // let rreq = world.this_process().immediate_receive_into(scope, buf);
+            //         }
+            //     },
+            // );
         }
     }
     // let t1 = timer.elapsed();
