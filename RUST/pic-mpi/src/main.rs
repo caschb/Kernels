@@ -187,6 +187,11 @@ impl<T: Copy> Grid<T> {
         self.data[index]
     }
 
+    fn relative_get(&self, rel_col_idx: usize, rel_row_idx: usize, rel_num_rows: usize) -> T {
+        let index = rel_col_idx * rel_num_rows + rel_row_idx;
+        self.data[index]
+    }
+
     fn set(&mut self, col_idx: usize, row_idx: usize, value: T) {
         let index = col_idx * self.rows + row_idx;
         self.data[index] = value;
@@ -399,28 +404,59 @@ fn compute_coulomb(x_dist: f64, y_dist: f64, q1: f64, q2: f64) -> (f64, f64) {
     (fx, fy)
 }
 
-fn compute_total_force(particle: &mut Particle, grid: &Grid<f64>) -> (f64, f64) {
-    let x = particle.x.floor() as usize;
-    let y = particle.y.floor() as usize;
+fn compute_total_force(
+    particle: &mut Particle,
+    tile: &BoundingBox,
+    grid: &Grid<f64>,
+) -> (f64, f64) {
+    let x = particle.x.floor() as usize - tile.left as usize;
+    let y = particle.y.floor() as usize - tile.bottom as usize;
     let rel_x = particle.x - particle.x.floor();
     let rel_y = particle.y - particle.y.floor();
     let mut temp_res_x = 0.0;
     let mut temp_res_y = 0.0;
 
-    let (temp_fx, temp_fy) = compute_coulomb(rel_x, rel_y, particle.q, grid.get(x, y));
+    // println!(
+    //     "pxf: {}, pyf: {}, tl: {}, tb: {}, pfx-tl:{} pyf-tb: {}",
+    //     particle.x.floor(),
+    //     particle.y.floor(),
+    //     tile.left,
+    //     tile.bottom,
+    //     x,
+    //     y
+    // );
+
+    let nrows = (tile.top - tile.bottom + 1) as usize;
+
+    let (temp_fx, temp_fy) =
+        compute_coulomb(rel_x, rel_y, particle.q, grid.relative_get(x, y, nrows));
     temp_res_x += temp_fx;
     temp_res_y += temp_fy;
 
-    let (temp_fx, temp_fy) = compute_coulomb(rel_x, 1.0 - rel_y, particle.q, grid.get(x, y + 1));
+    let (temp_fx, temp_fy) = compute_coulomb(
+        rel_x,
+        1.0 - rel_y,
+        particle.q,
+        grid.relative_get(x, y + 1, nrows),
+    );
     temp_res_x += temp_fx;
     temp_res_y -= temp_fy;
 
-    let (temp_fx, temp_fy) = compute_coulomb(1.0 - rel_x, rel_y, particle.q, grid.get(x + 1, y));
+    let (temp_fx, temp_fy) = compute_coulomb(
+        1.0 - rel_x,
+        rel_y,
+        particle.q,
+        grid.relative_get(x + 1, y, nrows),
+    );
     temp_res_x -= temp_fx;
     temp_res_y += temp_fy;
 
-    let (temp_fx, temp_fy) =
-        compute_coulomb(1.0 - rel_x, 1.0 - rel_y, particle.q, grid.get(x + 1, y + 1));
+    let (temp_fx, temp_fy) = compute_coulomb(
+        1.0 - rel_x,
+        1.0 - rel_y,
+        particle.q,
+        grid.relative_get(x + 1, y + 1, nrows),
+    );
     temp_res_x -= temp_fx;
     temp_res_y -= temp_fy;
 
@@ -773,15 +809,25 @@ fn main() {
         core::array::from_fn(|_| Vec::<Particle>::with_capacity(10));
     let mut recvbuf: [Vec<Particle>; 8] =
         core::array::from_fn(|_| Vec::<Particle>::with_capacity(10));
-    let mut send_size: [usize; 8] = [0; 8];
-    let mut recv_size: [usize; 8] = [0; 8];
+    let mut send_size: [usize; 8] = [0usize; 8];
+    let mut recv_size: [usize; 8] = [0usize; 8];
 
-    for it in 0..args.iterations + 1 {
+    // for rnk in 0..num_procs {
+    //     if rnk == my_rank {
+    //         println!("{}: {:?}", my_rank, my_tile);
+    //         for part in particles.iter() {
+    //             println!("{}: {:.1}, {:.1}", my_rank, part.x.floor(), part.y.floor());
+    //         }
+    //     }
+    //     world.barrier();
+    // }
+
+    for it in 0..args.iterations {
         //     if it == 1 {
         //         t0 = timer.elapsed();
         //     }
         for particle in particles.iter_mut() {
-            let (fx, fy) = compute_total_force(particle, &grid);
+            let (fx, fy) = compute_total_force(particle, &my_tile, &grid);
             let ax = fx * MASS_INV;
             let ay = fy * MASS_INV;
             let x_disp = particle.x + particle.v_x * DT + 0.5 * ax * DT.powi(2) + grid_size as f64;
@@ -792,71 +838,81 @@ fn main() {
             particle.v_x += ax * DT;
             particle.v_y += ay * DT;
             let owner = find_owner(
-                &particle, width, height, num_procs, i_crit, j_crit, i_leftover, j_leftover,
+                &particle,
+                width,
+                height,
+                num_procs_x,
+                i_crit,
+                j_crit,
+                i_leftover,
+                j_leftover,
             );
-            // if owner == nbr[0] {
-            //     sendbuf[0].push(*particle);
-            // } else if owner == nbr[1] {
-            //     sendbuf[1].push(*particle);
-            // } else if owner == nbr[2] {
-            //     sendbuf[2].push(*particle);
-            // } else if owner == nbr[3] {
-            //     sendbuf[3].push(*particle);
-            // } else if owner == nbr[4] {
-            //     sendbuf[4].push(*particle);
-            // } else if owner == nbr[5] {
-            //     sendbuf[5].push(*particle);
-            // } else if owner == nbr[6] {
-            //     sendbuf[6].push(*particle);
-            // } else if owner == nbr[7] {
-            //     sendbuf[7].push(*particle);
-            // } else {
-            //     panic!(
-            //         "Could not find neighbor owner of particle in tile {}, {:?}",
-            //         owner, nbr
-            //     );
-            // }
-            // for (idx, buf) in sendbuf.iter().enumerate() {
-            //     send_size[idx] = buf.len();
-            // }
-            // for i in 0..num_procs {
-            //     if i == my_rank {
-            //         println!("{}: {:?}\n{:?}", i, send_size, recv_size);
-            //     }
-            //     world.barrier();
-            // }
-            // mpi::request::multiple_scope(16, |scope, coll: &mut RequestCollection<'_, usize>| {
-            //     for (idx, buf_size) in send_size.iter().enumerate() {
-            //         let sreq = world
-            //             .process_at_rank(nbr[idx] as i32)
-            //             .immediate_send(scope, buf_size);
-            //         coll.add(sreq);
-            //     }
-            //     for recv_buf in recv_size.as_mut() {
-            //         let rreq = world.this_process().immediate_receive_into(scope, recv_buf);
-            //         coll.add(rreq);
-            //     }
-            // });
-            // for i in 0..num_procs {
-            //     if i == my_rank {
-            //         println!("{}: {:?}\n{:?}", i, send_size, recv_size);
-            //     }
-            //     world.barrier();
-            // }
-
-            // mpi::request::multiple_scope(
-            //     16,
-            //     |scope, coll: &mut RequestCollection<'_, Vec<Particle>>| {
-            //         for i in 0..8 {
-            //             let sreq = world
-            //                 .process_at_rank(nbr[i] as i32)
-            //                 .immediate_send(scope, &sendbuf[i]);
-            //             coll.add(sreq);
-            //             // let rreq = world.this_process().immediate_receive_into(scope, buf);
-            //         }
-            //     },
-            // );
+            if owner == my_rank {
+            } else if owner == nbr[0] {
+                sendbuf[0].push(*particle);
+            } else if owner == nbr[1] {
+                sendbuf[1].push(*particle);
+            } else if owner == nbr[2] {
+                sendbuf[2].push(*particle);
+            } else if owner == nbr[3] {
+                sendbuf[3].push(*particle);
+            } else if owner == nbr[4] {
+                sendbuf[4].push(*particle);
+            } else if owner == nbr[5] {
+                sendbuf[5].push(*particle);
+            } else if owner == nbr[6] {
+                sendbuf[6].push(*particle);
+            } else if owner == nbr[7] {
+                sendbuf[7].push(*particle);
+            } else {
+                panic!(
+                    "Could not find neighbor owner of particle in tile {}, {:?}",
+                    owner, nbr
+                );
+            }
+            for (idx, buf) in sendbuf.iter().enumerate() {
+                send_size[idx] = buf.len();
+            }
         }
+        mpi::request::multiple_scope(16, |scope, coll: &mut RequestCollection<'_, usize>| {
+            for (idx, buf_size) in send_size.iter().enumerate() {
+                let sreq = world
+                    .process_at_rank(nbr[idx] as i32)
+                    .immediate_send(scope, buf_size);
+                coll.add(sreq);
+            }
+            for (idx, recv_buf) in recv_size.iter_mut().enumerate() {
+                let rreq = world
+                    .process_at_rank(nbr[idx] as i32)
+                    .immediate_receive_into(scope, recv_buf);
+                coll.add(rreq);
+            }
+            let mut complete = vec![];
+            coll.wait_all(&mut complete);
+        });
+        for (idx, sz) in recv_size.iter().enumerate() {
+            recvbuf[idx].clear();
+            recvbuf[idx].resize(*sz, Particle::default());
+        }
+        mpi::request::multiple_scope(
+            16,
+            |scope, coll: &mut RequestCollection<'_, Vec<Particle>>| {
+                for (idx, buf) in sendbuf.iter().enumerate() {
+                    let sreq = world
+                        .process_at_rank(nbr[idx] as i32)
+                        .immediate_send(scope, buf);
+                    coll.add(sreq);
+                }
+                for (idx, buf) in recvbuf.iter_mut().enumerate() {
+                    let rreq = world
+                        .process_at_rank(nbr[idx] as i32)
+                        .immediate_receive_into(scope, buf);
+                    coll.add(rreq);
+                }
+                let mut complete = vec![];
+                coll.wait_all(&mut complete);
+            },
+        );
     }
     // let t1 = timer.elapsed();
     // let dt = (t1.checked_sub(t0)).unwrap();
