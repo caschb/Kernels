@@ -55,7 +55,8 @@ impl RandomDraw {
         self.lcg_seed = LCG_SEED;
         self.lcg_a[0] = LCG_A;
         for i in 1..self.lcg_a.len() {
-            self.lcg_a[i] = self.lcg_a[i - 1].pow(2);
+            // self.lcg_a[i] = self.lcg_a[i - 1].pow(2);
+            self.lcg_a[i] = self.lcg_a[i - 1].wrapping_pow(2);
         }
     }
 
@@ -83,7 +84,9 @@ impl RandomDraw {
         if k == 0 {
             return LCG_A;
         } else {
-            return self.sum_power(k - 1) * (1 + self.lcg_a[(k - 1) as usize]);
+            return self
+                .sum_power(k - 1)
+                .wrapping_mul(1 + self.lcg_a[(k - 1) as usize]);
         }
     }
 
@@ -105,7 +108,7 @@ impl RandomDraw {
         if tail_n == 0 {
             return head;
         }
-        head + self.lcg_a[self.log(n) as usize] * self.sumk(tail_n)
+        head.wrapping_add(self.lcg_a[self.log(n) as usize].wrapping_mul(self.sumk(tail_n)))
     }
 
     pub fn lcg_jump(&mut self, m: u64, bound: u64) {
@@ -131,10 +134,11 @@ impl RandomDraw {
         let mut s_part = 1u64;
         for i in 0..index {
             if lcg_power[i] != 0 {
-                s_part *= self.lcg_a[i];
+                s_part = s_part.wrapping_mul(self.lcg_a[i]);
             }
         }
-        self.lcg_seed = s_part * self.lcg_seed + (self.sumk(m - 1) + 1) * LCG_C;
+        let prod = s_part.wrapping_mul(self.lcg_seed);
+        self.lcg_seed = prod.wrapping_add((self.sumk(m - 1) + 1).wrapping_mul(LCG_C));
     }
 
     pub fn random_draw(&mut self, mu: f64) -> u64 {

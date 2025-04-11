@@ -409,8 +409,8 @@ fn compute_total_force(
     tile: &BoundingBox,
     grid: &Grid<f64>,
 ) -> (f64, f64) {
-    let x = particle.x.floor() as usize - tile.left as usize;
-    let y = particle.y.floor() as usize - tile.bottom as usize;
+    let x = (particle.x.floor() - tile.left as f64) as usize;
+    let y = (particle.y.floor() - tile.bottom as f64) as usize;
     let rel_x = particle.x - particle.x.floor();
     let rel_y = particle.y - particle.y.floor();
     let mut temp_res_x = 0.0;
@@ -441,6 +441,10 @@ fn compute_total_force(
     );
     temp_res_x += temp_fx;
     temp_res_y -= temp_fy;
+
+    if (x + 1) * nrows + (y) == 66 {
+        println!("{} {}", x + 1, y);
+    }
 
     let (temp_fx, temp_fy) = compute_coulomb(
         1.0 - rel_x,
@@ -705,11 +709,11 @@ fn main() {
     let mut nbr = [0u64; 8];
 
     nbr[0] = match my_rank_x == 0 {
-        true => my_rank + num_procs_x - 1,
+        true => my_rank + (num_procs_x - 1),
         false => my_rank - 1,
     };
     nbr[1] = match my_rank_x == num_procs_x - 1 {
-        true => my_rank - num_procs_x + 1,
+        true => (my_rank + 1) - num_procs_x,
         false => my_rank + 1,
     };
     nbr[2] = match my_rank_y == num_procs_y - 1 {
@@ -717,7 +721,7 @@ fn main() {
         false => my_rank + num_procs_x,
     };
     nbr[3] = match my_rank_y == 0 {
-        true => my_rank - num_procs_x + num_procs,
+        true => (my_rank + num_procs) - num_procs_x,
         false => my_rank - num_procs_x,
     };
     nbr[4] = match my_rank_y == num_procs_y - 1 {
@@ -729,11 +733,11 @@ fn main() {
         false => nbr[1] + num_procs_x,
     };
     nbr[6] = match my_rank_y == 0 {
-        true => nbr[0] - num_procs_x + num_procs,
+        true => (nbr[0] + num_procs) - num_procs_x,
         false => nbr[0] - num_procs_x,
     };
     nbr[7] = match my_rank_y == 0 {
-        true => nbr[1] - num_procs_x + num_procs,
+        true => (nbr[1] + num_procs) - num_procs_x,
         false => nbr[1] - num_procs_x,
     };
     let grid = initialize_grid(&my_tile);
@@ -798,34 +802,25 @@ fn main() {
             .process_at_rank(ROOT_RANK)
             .reduce_into(&particles.len(), SystemOperation::sum());
     }
-    // let timer = Instant::now();
-    // let mut t0 = timer.elapsed();
-
-    // let mut sendbuf = Vec::<Particle>::with_capacity(10);
-
-    // let mut sendbuf = [Vec::<Particle>::with_capacity(10); 8];
-
+    let timer = Instant::now();
+    let mut t0 = timer.elapsed();
     let mut sendbuf: [Vec<Particle>; 8] =
         core::array::from_fn(|_| Vec::<Particle>::with_capacity(10));
     let mut recvbuf: [Vec<Particle>; 8] =
         core::array::from_fn(|_| Vec::<Particle>::with_capacity(10));
+    let mut localbuf = Vec::<Particle>::new();
     let mut send_size: [usize; 8] = [0usize; 8];
     let mut recv_size: [usize; 8] = [0usize; 8];
 
-    // for rnk in 0..num_procs {
-    //     if rnk == my_rank {
-    //         println!("{}: {:?}", my_rank, my_tile);
-    //         for part in particles.iter() {
-    //             println!("{}: {:.1}, {:.1}", my_rank, part.x.floor(), part.y.floor());
-    //         }
-    //     }
-    //     world.barrier();
-    // }
-
     for it in 0..args.iterations {
-        //     if it == 1 {
-        //         t0 = timer.elapsed();
-        //     }
+        if it == 1 {
+            t0 = timer.elapsed();
+        }
+        if my_rank == 0 {
+            println!("it: {}", it);
+            println!("localbuf: {}", localbuf.capacity());
+            println!("particles: {}", particles.len());
+        }
         for particle in particles.iter_mut() {
             let (fx, fy) = compute_total_force(particle, &my_tile, &grid);
             let ax = fx * MASS_INV;
@@ -848,6 +843,7 @@ fn main() {
                 j_leftover,
             );
             if owner == my_rank {
+                localbuf.push(*particle);
             } else if owner == nbr[0] {
                 sendbuf[0].push(*particle);
             } else if owner == nbr[1] {
@@ -873,6 +869,9 @@ fn main() {
             for (idx, buf) in sendbuf.iter().enumerate() {
                 send_size[idx] = buf.len();
             }
+        }
+        if my_rank == 0 {
+            println!("Finished processing particles");
         }
         mpi::request::multiple_scope(16, |scope, coll: &mut RequestCollection<'_, usize>| {
             for (idx, buf_size) in send_size.iter().enumerate() {
@@ -913,10 +912,50 @@ fn main() {
                 coll.wait_all(&mut complete);
             },
         );
+        if my_rank == 0 {
+            println!("Finished communicating particles");
+        }
+        for sbuf in sendbuf.iter_mut() {
+            sbuf.clear();
+        }
+        particles.append(&mut localbuf);
+        for rbuf in recvbuf.iter_mut() {
+            particles.append(rbuf);
+        }
+        if my_rank == 0 {
+            println!("Finished reassembling particles vector");
+        }
+        // for rank in 0..num_procs {
+        //     if my_rank == rank {
+        //         print!("RANK: {}", my_rank);
+        //         for particle in particles.iter() {
+        //             print!(" ({} {}) ", particle.x, particle.y);
+        //         }
+        //         println!("");
+        //     }
+        //     world.barrier();
+        // }
     }
-    // let t1 = timer.elapsed();
-    // let dt = (t1.checked_sub(t0)).unwrap();
-    // let pic_time = dt.as_secs_f64();
+    let t1 = timer.elapsed();
+    let dt = (t1.checked_sub(t0)).unwrap();
+    let local_pic_time = dt.as_secs_f64();
+    let mut pic_time = 0.0f64;
+
+    if my_rank == 0 {
+        world.process_at_rank(0).reduce_into_root(
+            &local_pic_time,
+            &mut pic_time,
+            SystemOperation::max(),
+        );
+    } else {
+        world
+            .process_at_rank(0)
+            .reduce_into(&local_pic_time, SystemOperation::max());
+    }
+
+    if my_rank == 0 {
+        println!("total time: {}", pic_time);
+    }
 
     // let mut result = true;
     // for particle in particles.iter() {
