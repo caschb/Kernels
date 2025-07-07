@@ -916,7 +916,6 @@ fn main() {
             rbuf.clear();
         }
     }
-    world.barrier();
     let t1 = timer.elapsed();
     let dt = (t1.checked_sub(t0)).unwrap();
     let local_pic_time = dt.as_secs_f64();
