@@ -480,18 +480,17 @@ fn verify_particle(
     grid: &Grid<f64>,
     grid_size: u64,
 ) -> Status {
-    let disp = (iterations + 1) as f64 * (2.0 * particle.k + 1.0);
-    let x_final = match particle.q * grid.get(particle.x0 as usize, particle.y0 as usize) > 0.0 {
-        true => particle.x0 + disp,
-        false => particle.x0 - disp,
+    let x_final = particle.x0 + ((iterations + 1) as f64) * (2.0 * particle.k + 1.0);
+    let y_final = particle.y0 + ((iterations + 1) as f64) * particle.m;
+
+    let x_periodic = match x_final >= 0.0 {
+        true => x_final % (grid_size as f64),
+        false => (grid_size as f64) + x_final % (grid_size as f64),
     };
-    let y_final = particle.y0 + particle.m * (iterations + 1) as f64;
-    let grid_size_f = grid_size as f64;
-    let total_it = iterations as f64;
-
-    let x_periodic = (x_final + total_it * (2.0 * particle.k + 1.0) * grid_size_f) % grid_size_f;
-    let y_periodic = (y_final + total_it * (particle.m.abs()) * grid_size_f) % grid_size_f;
-
+    let y_periodic = match y_final >= 0.0 {
+        true => y_final % (grid_size as f64),
+        false => (grid_size as f64) + y_final % (grid_size as f64),
+    };
     if (particle.x - x_periodic).abs() > EPSILON || (particle.y - y_periodic).abs() > EPSILON {
         Status::Failure
     } else {
@@ -570,10 +569,11 @@ fn main() {
     };
     let mut num_procs_y = 0u64;
     let mut num_procs_x = 0u64;
+
+    // Same logic as in MPI1/PIC-static/pic.c:796
+    // "determine best way to create a 2D grid of ranks (closest to square, for
+    // best surface/volume ratio); we do this brute force for now"
     for procs in (1..((num_procs).isqrt() + 1)).rev() {
-        // if my_rank == 0 {
-        //     println!("comm_size, procs: {}, {}", comm_size, procs)
-        // }
         if num_procs % procs == 0 {
             num_procs_y = num_procs / procs;
             num_procs_x = procs;
@@ -812,15 +812,11 @@ fn main() {
     let mut send_size: [usize; 8] = [0usize; 8];
     let mut recv_size: [usize; 8] = [0usize; 8];
 
-    for it in 0..args.iterations {
+    for it in 0..args.iterations + 1 {
         if it == 1 {
             t0 = timer.elapsed();
         }
-        if my_rank == 0 {
-            println!("it: {}", it);
-            println!("localbuf: {}", localbuf.capacity());
-            println!("particles: {}", particles.len());
-        }
+
         for particle in particles.iter_mut() {
             let (fx, fy) = compute_total_force(particle, &my_tile, &grid);
             let ax = fx * MASS_INV;
@@ -866,12 +862,9 @@ fn main() {
                     owner, nbr
                 );
             }
-            for (idx, buf) in sendbuf.iter().enumerate() {
-                send_size[idx] = buf.len();
-            }
         }
-        if my_rank == 0 {
-            println!("Finished processing particles");
+        for (idx, buf) in sendbuf.iter().enumerate() {
+            send_size[idx] = buf.len();
         }
         mpi::request::multiple_scope(16, |scope, coll: &mut RequestCollection<'_, usize>| {
             for (idx, buf_size) in send_size.iter().enumerate() {
@@ -912,30 +905,18 @@ fn main() {
                 coll.wait_all(&mut complete);
             },
         );
-        if my_rank == 0 {
-            println!("Finished communicating particles");
-        }
         for sbuf in sendbuf.iter_mut() {
             sbuf.clear();
         }
+
+        particles.clear();
         particles.append(&mut localbuf);
         for rbuf in recvbuf.iter_mut() {
             particles.append(rbuf);
+            rbuf.clear();
         }
-        if my_rank == 0 {
-            println!("Finished reassembling particles vector");
-        }
-        // for rank in 0..num_procs {
-        //     if my_rank == rank {
-        //         print!("RANK: {}", my_rank);
-        //         for particle in particles.iter() {
-        //             print!(" ({} {}) ", particle.x, particle.y);
-        //         }
-        //         println!("");
-        //     }
-        //     world.barrier();
-        // }
     }
+    world.barrier();
     let t1 = timer.elapsed();
     let dt = (t1.checked_sub(t0)).unwrap();
     let local_pic_time = dt.as_secs_f64();
@@ -957,23 +938,36 @@ fn main() {
         println!("total time: {}", pic_time);
     }
 
-    // let mut result = true;
-    // for particle in particles.iter() {
-    //     match verify_particle(particle, args.iterations, &grid, grid_size) {
-    //         Status::Failure => {
-    //             result = false;
-    //             break;
-    //         }
-    //         _ => (),
-    //     };
-    // }
-
-    // match result {
-    //     true => {
-    //         let average_time = (args.iterations * args.total_particles) as f64 / pic_time;
-    //         println!("Solution validates");
-    //         println!("Rate (Mparticles_moved/s): {:.6}", 1e-6 * average_time);
-    //     }
-    //     false => println!("Solution does not validate"),
-    // };
+    let mut result = true;
+    let mut local_result = true;
+    for particle in particles.iter() {
+        match verify_particle(particle, args.iterations, &grid, grid_size) {
+            Status::Failure => {
+                local_result = false;
+                break;
+            }
+            _ => (),
+        };
+    }
+    if my_rank == 0 {
+        world.process_at_rank(0).reduce_into_root(
+            &local_result,
+            &mut result,
+            SystemOperation::logical_and(),
+        );
+    } else {
+        world
+            .process_at_rank(0)
+            .reduce_into(&local_result, SystemOperation::logical_and());
+    }
+    if my_rank == 0 {
+        match result {
+            true => {
+                let average_time = (args.iterations * args.total_particles) as f64 / pic_time;
+                println!("Solution validates");
+                println!("Rate (Mparticles_moved/s): {:.6}", 1e-6 * average_time);
+            }
+            false => println!("Solution does not validate"),
+        };
+    }
 }
