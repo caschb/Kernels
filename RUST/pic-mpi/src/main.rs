@@ -253,6 +253,7 @@ fn finalize_distribution(particles: &mut [Particle], comm: &mpi::topology::Simpl
 fn initialize_linear(
     n_input: u64,
     grid_size: u64,
+    tile: &BoundingBox,
     alpha: f64,
     beta: f64,
     horizontal_speed: f64,
@@ -262,13 +263,15 @@ fn initialize_linear(
     let mut dice = common::RandomDraw::new();
     let mut particles = Vec::<Particle>::new();
 
-    let step = 1.0 / (grid_size as f64);
+    let step = 1.0 / ((grid_size - 1) as f64);
     let total_weight =
         beta * grid_size as f64 - alpha * 0.5 * step * grid_size as f64 * (grid_size as f64 - 1.0);
     dice.lcg_init();
-    for x in 0..grid_size {
+    for x in tile.left..tile.right {
+        let start_index = tile.bottom + x * grid_size;
+        dice.lcg_jump(2 * start_index, 0);
         let current_weight = beta - alpha * step * (x as f64);
-        for y in 0..grid_size {
+        for y in tile.bottom..tile.top {
             let part_num = dice
                 .random_draw(n_input as f64 * (current_weight / total_weight) / grid_size as f64);
             for _p in 0..part_num {
@@ -288,6 +291,7 @@ fn initialize_linear(
 fn initialize_patch(
     n_input: u64,
     grid_size: u64,
+    tile: &BoundingBox,
     patch: &BoundingBox,
     horizontal_speed: f64,
     vertical_speed: f64,
@@ -302,8 +306,10 @@ fn initialize_patch(
 
     dice.lcg_init();
 
-    for x in 0..grid_size {
-        for y in 0..grid_size {
+    for x in tile.left..tile.right {
+        let start_index = tile.bottom + x * grid_size;
+        dice.lcg_jump(2 * start_index, 0);
+        for y in tile.bottom..tile.top {
             let mut part_num = dice.random_draw(particles_per_cell);
             if x < patch.left || x > patch.right || y < patch.bottom || y > patch.top {
                 part_num = 0;
@@ -326,6 +332,7 @@ fn initialize_patch(
 fn initialize_geometric(
     n_input: u64,
     grid_size: u64,
+    tile: &BoundingBox,
     rho: f64,
     horizontal_speed: f64,
     vertical_speed: f64,
@@ -339,8 +346,10 @@ fn initialize_geometric(
     let factor =
         n_input as f64 * ((1.0 - rho) / (1.0 - rho.powf(grid_size as f64))) / (grid_size as f64);
 
-    for x in 0..grid_size {
-        for y in 0..grid_size {
+    for x in tile.left..tile.right {
+        let start_index = tile.bottom + x * grid_size;
+        dice.lcg_jump(2 * start_index, 0);
+        for y in tile.bottom..tile.top {
             let part_num = dice.random_draw(factor * rho.powf(x as f64));
             for _p in 0..part_num {
                 let mut particle = Particle::default();
@@ -746,6 +755,7 @@ fn main() {
         InitStyle::Geometric { attenuation_factor } => initialize_geometric(
             args.total_particles,
             grid_size,
+            &my_tile,
             attenuation_factor,
             k,
             m,
@@ -764,6 +774,7 @@ fn main() {
             initialize_linear(
                 args.total_particles,
                 grid_size,
+                &my_tile,
                 negative_slope,
                 constant_offset,
                 k,
@@ -786,7 +797,15 @@ fn main() {
             if bad_patch(&patch, &grid_patch) {
                 panic!("ERROR: inconsistent initial patch");
             };
-            initialize_patch(args.total_particles, grid_size, &patch, k, m, &world)
+            initialize_patch(
+                args.total_particles,
+                grid_size,
+                &my_tile,
+                &patch,
+                k,
+                m,
+                &world,
+            )
         }
     };
     if my_rank == 0 {
