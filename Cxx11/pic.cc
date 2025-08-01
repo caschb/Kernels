@@ -61,7 +61,8 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "prk_util.h"
-
+#include <fstream>
+#include <sstream>
 #include "random_draw.h"
 
 static const double Q = 1.0;
@@ -93,6 +94,18 @@ typedef struct particle_t {
   int64_t  k; //  determines how many cells particles move per time step in the x direction
   int64_t  m; //  determines how many cells particles move per time step in the y direction
 } particle_t;
+
+void save_particles(const particle_t* particles, int total_particles, int iteration) {
+  std::stringstream filename;
+  filename << "./iteration_" << iteration << ".csv";
+  std::ofstream csv_file(filename.str(), std::ios::out);
+  csv_file << "x,y,v_x,v_y,q" << '\n';
+  for(int i = 0; i < total_particles; ++i) {
+    const auto particle = particles[i];
+    csv_file << particle.x << ',' << particle.y << ',' << particle.v_x << ',' << particle.v_y << "," << particle.q << '\n';
+  }
+  csv_file.close();
+}
 
 /* Initializes the grid of charges
   We follow a column major format for the grid. Note that this may affect cache performance, depending on access pattern of particles. */
@@ -569,7 +582,7 @@ int main(int argc, char ** argv) {
   }
 
   std::cout << "Number of particles placed     = " << n << std::endl;
-
+  save_particles(particles, n, 0);
   double pic_time;
   {
       for (int iter=0; iter<=iterations; iter++) {
@@ -592,6 +605,7 @@ int main(int argc, char ** argv) {
               particles[i].v_x += ax * DT;
               particles[i].v_y += ay * DT;
           }
+	  save_particles(particles, n, iter+1);
       }
   }
 
