@@ -129,6 +129,43 @@ typedef struct particle_t {
   double   ID;   // ID of particle; use double to create homogeneous type
 } particle_t;
 
+/* Diagnostic particle dump, for the visualisations. Driven by the environment
+   rather than argv so the positional argument list callers rely on is
+   unchanged; with PRK_PARTICLE_DUMP unset this costs one null test per step. */
+static FILE *dump_open(int my_ID, bbox_t tile) {
+  const char *prefix = getenv("PRK_PARTICLE_DUMP");
+  char name[1024];
+  FILE *tiles, *out;
+
+  if (!prefix) return NULL;
+
+  snprintf(name, sizeof(name), "%s_tiles_%d.csv", prefix, my_ID);
+  tiles = fopen(name, "w");
+  if (tiles) {
+    fprintf(tiles, "rank,left,right,bottom,top\n");
+    fprintf(tiles, "%d,%llu,%llu,%llu,%llu\n", my_ID,
+            (unsigned long long)tile.left, (unsigned long long)tile.right,
+            (unsigned long long)tile.bottom, (unsigned long long)tile.top);
+    fclose(tiles);
+  }
+
+  snprintf(name, sizeof(name), "%s_%d.csv", prefix, my_ID);
+  out = fopen(name, "w");
+  if (out) fprintf(out, "step,rank,id,x,y,v_x,v_y,k,m,x0,y0\n");
+  return out;
+}
+
+static void dump_particles(FILE *out, int my_ID, uint64_t step,
+                           particle_t *p, uint64_t count) {
+  uint64_t i;
+  if (!out) return;
+  for (i = 0; i < count; i++) {
+    fprintf(out, "%llu,%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n",
+            (unsigned long long)step, my_ID, p[i].ID, p[i].x, p[i].y,
+            p[i].v_x, p[i].v_y, p[i].k, p[i].m, p[i].x0, p[i].y0);
+  }
+}
+
 int bad_patch(bbox_t *patch, bbox_t *patch_contain) {
   if (patch->left>=patch->right || patch->bottom>=patch->top) return(1);
   if (patch_contain) {
@@ -944,6 +981,13 @@ int main(int argc, char ** argv) {
   if (error) printf("Rank %d could not allocate communication buffers\n", my_ID);
   bail_out(error);
 
+  FILE *dump_file = dump_open(my_ID, my_tile);
+  uint64_t dump_every = 1;
+  if (getenv("PRK_DUMP_EVERY")) {
+    dump_every = strtoull(getenv("PRK_DUMP_EVERY"), NULL, 10);
+    if (dump_every < 1) dump_every = 1;
+  }
+
   /* Run the simulation */
   for (iter=0; iter<=iterations; iter++) {
 
@@ -952,6 +996,11 @@ int main(int argc, char ** argv) {
       MPI_Barrier(MPI_COMM_WORLD);
       local_pic_time = wtime();
     }
+
+    /* Recorded before the move, so `step` counts moves already applied and
+       lines up with the analytic solution in verifyParticle. */
+    if (dump_file && iter % dump_every == 0)
+      dump_particles(dump_file, my_ID, iter, particles, particles_count);
 
     ptr_my = 0;
     for (i=0; i<8; i++) to_send[i]=0;
@@ -1031,6 +1080,12 @@ int main(int argc, char ** argv) {
   } // end of iterations
 
   local_pic_time = wtime() - local_pic_time;
+
+  if (dump_file) {
+    dump_particles(dump_file, my_ID, iterations+1, particles, particles_count);
+    fclose(dump_file);
+  }
+
   MPI_Reduce(&local_pic_time, &pic_time, 1, MPI_DOUBLE, MPI_MAX, root,
              MPI_COMM_WORLD);
 

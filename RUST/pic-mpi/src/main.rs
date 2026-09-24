@@ -118,8 +118,83 @@ struct Args {
     /// Initial vertical velocity of particles
     #[arg(short, long, value_name = "m")]
     pub vertical_particle_velocity: u64,
+    /// Record how many particles each rank hands to its neighbours per step,
+    /// writing <PATH>_<rank>.csv once the run is over. For the visualisations;
+    /// a run with this set is a diagnostic run, not a timing run.
+    #[arg(long, value_name = "PATH")]
+    pub migration_log: Option<String>,
+    /// Record particle state every --dump-every steps, writing <PATH>_<rank>.csv
+    /// and <PATH>_tiles_<rank>.csv. Buffered in memory and flushed after the
+    /// run, so intended for the small runs the figures use.
+    #[arg(long, value_name = "PATH")]
+    pub particle_dump: Option<String>,
+    /// Interval, in steps, of --particle-dump
+    #[arg(long, default_value_t = 1)]
+    pub dump_every: u64,
     #[command(subcommand)]
     init_style: InitStyle,
+}
+
+/// Per-step migration record: how many particles the rank held at the start of
+/// the step, and how many of them it enqueued for its eight neighbours.
+struct MigrationStep {
+    step: u64,
+    resident: usize,
+    migrated: usize,
+}
+
+/// One particle's state at one step, as dumped for the figures.
+struct ParticleSample {
+    step: u64,
+    particle: Particle,
+}
+
+fn write_particle_dump(
+    path: &str,
+    rank: u64,
+    tile: &BoundingBox,
+    samples: &[ParticleSample],
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut tiles = std::fs::File::create(format!("{path}_tiles_{rank}.csv"))?;
+    writeln!(tiles, "rank,left,right,bottom,top")?;
+    writeln!(
+        tiles,
+        "{},{},{},{},{}",
+        rank, tile.left, tile.right, tile.bottom, tile.top
+    )?;
+
+    let file = std::fs::File::create(format!("{path}_{rank}.csv"))?;
+    let mut out = std::io::BufWriter::new(file);
+    writeln!(out, "step,rank,id,x,y,v_x,v_y,k,m,x0,y0")?;
+    for sample in samples {
+        let p = &sample.particle;
+        writeln!(
+            out,
+            "{},{},{},{},{},{},{},{},{},{},{}",
+            sample.step, rank, p.id, p.x, p.y, p.v_x, p.v_y, p.k, p.m, p.x0, p.y0
+        )?;
+    }
+    out.flush()
+}
+
+fn write_migration_log(
+    path: &str,
+    rank: u64,
+    log: &[MigrationStep],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(format!("{path}_{rank}.csv"))?;
+    writeln!(file, "step,rank,resident,migrated")?;
+    for entry in log {
+        writeln!(
+            file,
+            "{},{},{},{}",
+            entry.step, rank, entry.resident, entry.migrated
+        )?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -830,10 +905,26 @@ fn main() {
     let mut localbuf = Vec::<Particle>::new();
     let mut send_size: [usize; 8] = [0usize; 8];
     let mut recv_size: [usize; 8] = [0usize; 8];
+    let mut migration_log: Option<Vec<MigrationStep>> = args
+        .migration_log
+        .as_ref()
+        .map(|_| Vec::with_capacity(args.iterations as usize + 1));
+    let dump_every = args.dump_every.max(1);
+    let mut particle_dump: Option<Vec<ParticleSample>> =
+        args.particle_dump.as_ref().map(|_| Vec::new());
 
     for it in 0..args.iterations + 1 {
         if it == 1 {
             t0 = timer.elapsed();
+        }
+        let resident = particles.len();
+        if let Some(dump) = particle_dump.as_mut() {
+            if it % dump_every == 0 {
+                dump.extend(particles.iter().map(|p| ParticleSample {
+                    step: it,
+                    particle: *p,
+                }));
+            }
         }
 
         for particle in particles.iter_mut() {
@@ -884,6 +975,13 @@ fn main() {
         }
         for (idx, buf) in sendbuf.iter().enumerate() {
             send_size[idx] = buf.len();
+        }
+        if let Some(log) = migration_log.as_mut() {
+            log.push(MigrationStep {
+                step: it,
+                resident,
+                migrated: send_size.iter().sum(),
+            });
         }
         mpi::request::multiple_scope(16, |scope, coll: &mut RequestCollection<'_, usize>| {
             for (idx, buf_size) in send_size.iter().enumerate() {
@@ -938,6 +1036,25 @@ fn main() {
     let t1 = timer.elapsed();
     let dt = (t1.checked_sub(t0)).unwrap();
     let local_pic_time = dt.as_secs_f64();
+
+    if let (Some(path), Some(dump)) = (args.particle_dump.as_ref(), particle_dump.as_mut()) {
+        // The loop body runs iterations + 1 times, which is the count
+        // verify_particle uses, so the final state gets that step number.
+        let final_step = args.iterations + 1;
+        dump.extend(particles.iter().map(|p| ParticleSample {
+            step: final_step,
+            particle: *p,
+        }));
+        if let Err(err) = write_particle_dump(path, my_rank, &my_tile, dump) {
+            panic!("Error writing particle dump to {path}_{my_rank}.csv: {err}");
+        }
+    }
+
+    if let (Some(path), Some(log)) = (args.migration_log.as_ref(), migration_log.as_ref()) {
+        if let Err(err) = write_migration_log(path, my_rank, log) {
+            panic!("Error writing migration log to {path}_{my_rank}.csv: {err}");
+        }
+    }
     let mut pic_time = 0.0f64;
 
     if my_rank == 0 {
